@@ -3,9 +3,10 @@ import base64
 import random
 import os
 import string
-import secrets # Import the secrets module
+import secrets  # Import the secrets module
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Header, Query, Request
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
@@ -65,6 +66,19 @@ class PaginatedResponse(BaseModel):
     next: Optional[str]  # URL for the next page
     previous: Optional[str]  # URL for the previous page
     items: List[dict]
+
+
+# --- HEALTH CHECK ---
+@app.get("/health", tags=["Health Check"])
+def health_check():
+    """Checks the health of the API and its database connection."""
+    try:
+        conn = engine.connect()
+        conn.execute(text("SELECT 1"))
+        conn.close()
+        return {"status": "ok", "database": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail={"status": "error", "database": "error", "details": str(e)})
 
 
 # --- AUXILIARY LISTING ENDPOINTS ---
@@ -290,7 +304,13 @@ def close_ticket(ticket_id: int):
         conn.close()
 
 
+@app.get("/", include_in_schema=False)
+async def redirect_to_docs():
+    return RedirectResponse(url="/redoc")
+
+
 if __name__ == "__main__":
     import uvicorn
+
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
