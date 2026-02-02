@@ -1,0 +1,29 @@
+# Test your FastAPI endpoints
+
+GET http://localhost:8000/topics
+X-Api-key: YOUR_MASTER_KEY_HERE
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8000/departments
+X-Api-key: YOUR_MASTER_KEY_HERE
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8000/statuses
+X-Api-key: YOUR_MASTER_KEY_HERE
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8000/tickets/search?email=efr-communications-prod@cuf.pt&status_id=10&limit=10&offset=0
+X-Api-key: YOUR_MASTER_KEY_HERE
+Accept: application/json
+
+###
+
+GET http://127.0.0.1:8000/tickets/search?status_id=10&dept_id=22&topic_id=36
+X-Api-key: YOUR_MASTER_KEY_HERE
+Accept: application/json

@@ -1,0 +1,16 @@
+.idea
+.git
+.gitignore
+Dockerfile
+.dockerignore
+README.md
+*.pyc
+*.pyo
+*.pyd
+__pycache__
+.pytest_cache
+.env
+.env.example
+error_log.txt
+log_erro.txt
+uv.lock
