@@ -7,9 +7,10 @@ import secrets  # Import the secrets module
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Header, Query, Request
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
+from datetime import datetime
 
 # Load environment variables from .env file
 load_dotenv()
@@ -59,17 +60,63 @@ class ReplyCreate(BaseModel):
     is_staff: bool = False
 
 
-class PaginatedResponse(BaseModel):
+class HealthResponse(BaseModel):
+    status: str
+    database: str
+
+
+class TopicResponse(BaseModel):
+    topic_id: int
+    topic: str
+    ispublic: int
+
+
+class DepartmentResponse(BaseModel):
+    id: int
+    name: str
+
+
+class StatusResponse(BaseModel):
+    id: int
+    name: str
+    state: str
+
+
+class TicketItem(BaseModel):
+    ticket_id: int
+    number: str
+    created: datetime
+    status_name: str
+    topic_name: Optional[str] = None
+    dept_name: Optional[str] = None
+    owner_name: str
+    email: str
+
+
+class PaginatedTicketResponse(BaseModel):
     total: int
     limit: int
     offset: int
-    next: Optional[str]  # URL for the next page
-    previous: Optional[str]  # URL for the previous page
-    items: List[dict]
+    next: Optional[str] = None
+    previous: Optional[str] = None
+    items: List[TicketItem]
+
+
+class TicketCreateResponse(BaseModel):
+    ticket_id: int
+    number: str
+
+
+class AttachmentResponse(BaseModel):
+    file_id: int
+
+
+class CloseResponse(BaseModel):
+    status: str
 
 
 # --- HEALTH CHECK ---
-@app.get("/health", tags=["Health Check"])
+@app.get("/health", tags=["Health Check"], response_model=HealthResponse)
 def health_check():
     """Checks the health of the API and its database connection."""
     try:
@@ -83,7 +130,7 @@ def health_check():
 
 # --- AUXILIARY LISTING ENDPOINTS ---
 
-@app.get("/topics", dependencies=[Depends(verify_token)], tags=["Listings"])
+@app.get("/topics", dependencies=[Depends(verify_token)], tags=["Listings"], response_model=List[TopicResponse])
 def list_help_topics():
     """Lists active Help Topics (e.g., General Support, Sales)."""
     conn = engine.connect()
@@ -91,13 +138,12 @@ def list_help_topics():
         # We fetch only active topics (isactive = 1) and order them alphabetically
         query = text("SELECT topic_id, topic, ispublic FROM ost_help_topic WHERE isactive = 1 ORDER BY topic ASC")
         results = conn.execute(query).mappings().all()
-        print(results)
         return [dict(row) for row in results]
     finally:
         conn.close()
 
 
-@app.get("/departments", dependencies=[Depends(verify_token)], tags=["Listings"])
+@app.get("/departments", dependencies=[Depends(verify_token)], tags=["Listings"], response_model=List[DepartmentResponse])
 def list_departments():
     """Lists available Departments (e.g., Support, Finance)."""
     conn = engine.connect()
@@ -110,7 +156,7 @@ def list_departments():
         conn.close()
 
 
-@app.get("/statuses", dependencies=[Depends(verify_token)], tags=["Listings"])
+@app.get("/statuses", dependencies=[Depends(verify_token)], tags=["Listings"], response_model=List[StatusResponse])
 def list_statuses():
     """Lists ticket Statuses (e.g., Open, Closed, Resolved)."""
     conn = engine.connect()
@@ -125,7 +171,7 @@ def list_statuses():
 
 # --- ENDPOINTS ---
 
-@app.get("/tickets/search", response_model=PaginatedResponse, dependencies=[Depends(verify_token)], tags=["Search"])
+@app.get("/tickets/search", response_model=PaginatedTicketResponse, dependencies=[Depends(verify_token)], tags=["Search"])
 def search_tickets(
         request: Request,  # Necessary to assemble the base URL
         status_id: Optional[int] = None,
@@ -222,7 +268,7 @@ def search_tickets(
         conn.close()
 
 
-@app.post("/tickets", dependencies=[Depends(verify_token)], tags=["Core"])
+@app.post("/tickets", dependencies=[Depends(verify_token)], tags=["Core"], response_model=TicketCreateResponse)
 def create_ticket(ticket: TicketCreate):
     """Creates ticket, thread and subject."""
     conn = engine.connect()
@@ -256,7 +302,7 @@ def create_ticket(ticket: TicketCreate):
         conn.close()
 
 
-@app.post("/tickets/{ticket_id}/attach", dependencies=[Depends(verify_token)], tags=["Attachments"])
+@app.post("/tickets/{ticket_id}/attach", dependencies=[Depends(verify_token)], tags=["Attachments"], response_model=AttachmentResponse)
 async def add_attachment(ticket_id: int, file: UploadFile = File(...)):
     """Chunk logic for attachments in osTicket."""
     conn = engine.connect()
@@ -291,7 +337,7 @@ async def add_attachment(ticket_id: int, file: UploadFile = File(...)):
         conn.close()
 
 
-@app.put("/tickets/{ticket_id}/close", dependencies=[Depends(verify_token)], tags=["Status"])
+@app.put("/tickets/{ticket_id}/close", dependencies=[Depends(verify_token)], tags=["Status"], response_model=CloseResponse)
 def close_ticket(ticket_id: int):
     """Closes the ticket (Status ID 3)."""
     conn = engine.connect()
