@@ -1,0 +1,21 @@
+services:
+  test-db:
+    image: mariadb:10
+    container_name: osticket-test-db
+    environment:
+      # These are the credentials your test suite will use
+      MYSQL_ROOT_PASSWORD: testpassword
+      MYSQL_DATABASE: osticket_test
+      MYSQL_USER: testuser
+      MYSQL_PASSWORD: testpassword
+    ports:
+      # Map the container's port 3306 to the host's port 3307 to avoid conflicts
+      # with any local MySQL instance you might be running.
+      - "3307:3306"
+    volumes:
+      # This is the magic part: it mounts your schema file into the directory
+      # where MySQL looks for initialization scripts on startup.
+      - ./tests/schema/install-mysql.sql:/docker-entrypoint-initdb.d/init.sql
+    # MariaDB 10 typically uses 'mysql_native_password' by default, so this command might not be strictly necessary,
+    # but keeping it ensures compatibility if the client expects it.
+    command: --default-authentication-plugin=mysql_native_password

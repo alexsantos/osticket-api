@@ -6,11 +6,11 @@ from pydantic import BaseModel
 
 # --- Request Models ---
 class TicketCreate(BaseModel):
-    name: str
-    email: str
+    user_id: int
     subject: str
     message: str
-    topic_id: int = 1
+    topic_id: Optional[int] = None
+    dept_id: Optional[int] = None
 
 
 class ReplyCreate(BaseModel):
@@ -41,6 +41,23 @@ class StatusResponse(BaseModel):
     id: int
     name: str
     state: str
+
+
+class UserResponse(BaseModel):
+    id: int
+    name: str
+    email: str
+    created: datetime
+    updated: datetime
+
+
+class PaginatedUserResponse(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    next: Optional[str] = None
+    previous: Optional[str] = None
+    items: List[UserResponse]
 
 
 class TicketItem(BaseModel):
