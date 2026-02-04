@@ -8,12 +8,7 @@ The main goal of this project is to offer a modern, flexible, and easy-to-use AP
 
 ## Configuration
 
-To run this application, you need to configure the following environment variables. You can create a `.env` file in the root of the project to store these values. An example file `.env.example` is provided.
-
-### API Keys
-
-- `API_KEYS`: A comma-separated list of API keys that are authorized to use the API.
-  - Example: `API_KEYS="key1,key2,another-secret-key"`
+To run this application, you need to configure the following environment variables.
 
 ### Database Variables
 
@@ -25,6 +20,12 @@ To run this application, you need to configure the following environment variabl
 ### Port
 
 - `PORT`: The port on which the application will run. Defaults to `8080`.
+
+## API Keys
+
+This API uses the API keys configured within your osTicket installation. To create and manage API keys, log in to your osTicket admin panel and navigate to `Admin Panel > Manage > API Keys`.
+
+When creating an API key, you can also specify a whitelisted IP address for added security. This API will enforce that whitelist.
 
 ## Build Instructions
 
@@ -46,18 +47,24 @@ This project is designed to be run in a Docker container.
 
 ### Running the Container
 
-1.  **Create a `.env` file** with the necessary environment variables (as described in the Configuration section).
-2.  **Run the Docker container:**
+You can run the container by passing the environment variables directly on the command line.
 
-    ```bash
-    docker run -d -p 8080:8080 --env-file .env --name osticket-api-container osticket-api
-    ```
+```bash
+docker run -d -p 8080:8080 \
+  -e DB_USER="your_db_user" \
+  -e DB_PASSWORD="your_db_password" \
+  -e DB_HOST="your_db_host" \
+  -e DB_NAME="your_db_name" \
+  -e PORT="8080" \
+  --name osticket-api-container \
+  osticket-api
+```
 
 The API will be accessible at `http://localhost:8080`.
 
 ## API Endpoints
 
-All endpoints require an `X-API-Key` header with a valid API key.
+All endpoints require an `X-API-Key` header with a valid API key created in osTicket.
 
 ### Listings
 
@@ -65,21 +72,21 @@ All endpoints require an `X-API-Key` header with a valid API key.
     -   **Description:** Lists all active help topics.
     -   **Example:**
         ```bash
-        curl -X GET "http://localhost:8080/topics" -H "X-API-Key: your_api_key"
+        curl -X GET "http://localhost:8080/topics" -H "X-API-Key: your_osTicket_api_key"
         ```
 
 -   **GET /departments**
     -   **Description:** Lists all available departments.
     -   **Example:**
         ```bash
-        curl -X GET "http://localhost:8080/departments" -H "X-API-Key: your_api_key"
+        curl -X GET "http://localhost:8080/departments" -H "X-API-Key: your_osTicket_api_key"
         ```
 
 -   **GET /statuses**
     -   **Description:** Lists all ticket statuses.
     -   **Example:**
         ```bash
-        curl -X GET "http://localhost:8080/statuses" -H "X-API-Key: your_api_key"
+        curl -X GET "http://localhost:8080/statuses" -H "X-API-Key: your_osTicket_api_key"
         ```
 
 ### Search
@@ -95,7 +102,7 @@ All endpoints require an `X-API-Key` header with a valid API key.
         -   `offset` (optional, default: 0): The starting point for pagination.
     -   **Example:**
         ```bash
-        curl -X GET "http://localhost:8080/tickets/search?email=user@example.com&limit=10" -H "X-API-Key: your_api_key"
+        curl -X GET "http://localhost:8080/tickets/search?email=user@example.com&limit=10" -H "X-API-Key: your_osTicket_api_key"
         ```
 
 ### Core
@@ -116,7 +123,7 @@ All endpoints require an `X-API-Key` header with a valid API key.
         ```bash
         curl -X POST "http://localhost:8080/tickets" \
         -H "Content-Type: application/json" \
-        -H "X-API-Key: your_api_key" \
+        -H "X-API-Key: your_osTicket_api_key" \
         -d '{
           "name": "John Doe",
           "email": "john.doe@example.com",
@@ -137,7 +144,7 @@ All endpoints require an `X-API-Key` header with a valid API key.
     -   **Example:**
         ```bash
         curl -X POST "http://localhost:8080/tickets/123/attach" \
-        -H "X-API-Key: your_api_key" \
+        -H "X-API-Key: your_osTicket_api_key" \
         -F "file=@/path/to/your/file.txt"
         ```
 
@@ -149,5 +156,5 @@ All endpoints require an `X-API-Key` header with a valid API key.
         -   `ticket_id`: The ID of the ticket to close.
     -   **Example:**
         ```bash
-        curl -X PUT "http://localhost:8080/tickets/123/close" -H "X-API-Key: your_api_key"
+        curl -X PUT "http://localhost:8080/tickets/123/close" -H "X-API-Key: your_osTicket_api_key"
         ```

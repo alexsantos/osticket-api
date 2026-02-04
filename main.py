@@ -1,16 +1,21 @@
-import hashlib
 import base64
-import random
+import hashlib
 import os
+import random
 import string
-import secrets  # Import the secrets module
-from typing import List, Optional
-from fastapi import FastAPI, HTTPException, UploadFile, File, Depends, Header, Query, Request
-from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, Field
-from sqlalchemy import create_engine, text
-from dotenv import load_dotenv
 from datetime import datetime
+from typing import List, Optional
+from urllib.parse import urlencode
+
+from dotenv import load_dotenv
+from fastapi import (Depends, FastAPI, File, Header, HTTPException, Query,
+                     Request, UploadFile)
+from fastapi.responses import RedirectResponse
+from sqlalchemy import create_engine, text
+
+from models import (AttachmentResponse, CloseResponse, DepartmentResponse,
+                    HealthResponse, PaginatedTicketResponse, StatusResponse,
+                    TicketCreate, TicketCreateResponse, TopicResponse)
 
 # Load environment variables from .env file
 load_dotenv()
@@ -28,91 +33,33 @@ if not all([DB_USER, DB_PASSWORD, DB_HOST, DB_NAME]):
 
 DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/{DB_NAME}"
 
-# Load API keys from an environment variable (comma-separated).
-API_KEYS_STR = os.getenv("API_KEYS")
-if not API_KEYS_STR:
-    raise ValueError("API_KEYS environment variable is not set.")
-API_KEYS = {key.strip() for key in API_KEYS_STR.split(",")}
-
 engine = create_engine(DB_URL, pool_pre_ping=True)
 
 
 # --- SECURITY (Dependency Injection) ---
-async def verify_token(x_api_key: str = Header(...)):
-    # Use secrets.compare_digest for constant-time comparison to prevent timing attacks
-    if not any(secrets.compare_digest(x_api_key, api_key) for api_key in API_KEYS):
-        raise HTTPException(status_code=403, detail="Access denied: Invalid API Key")
+async def verify_token(x_api_key: str = Header(...), request: Request = None):
+    """
+    Verify the API key against the osTicket database.
+    This function checks if the API key is valid, active, and matches the client's IP address.
+    """
+    conn = engine.connect()
+    try:
+        query = text("SELECT `id`, `apikey`, `isactive`, `ipaddr` FROM `ost_api_key` WHERE `apikey` = :apikey")
+        result = conn.execute(query, {"apikey": x_api_key}).mappings().first()
 
+        if not result:
+            raise HTTPException(status_code=401, detail="Invalid API Key")
 
-# --- MODELS ---
-class TicketCreate(BaseModel):
-    name: str
-    email: str
-    subject: str
-    message: str
-    topic_id: int = 1
+        if not result["isactive"]:
+            raise HTTPException(status_code=403, detail="API Key is not active")
 
+        # Check if the client's IP address matches the one configured for the API key
+        # osTicket allows for a whitelisted IP address for each API key
+        if result["ipaddr"] and result["ipaddr"] != request.client.host:
+            raise HTTPException(status_code=403, detail="IP address not allowed")
 
-class ReplyCreate(BaseModel):
-    ticket_id: int
-    name: str
-    message: str
-    is_staff: bool = False
-
-
-class HealthResponse(BaseModel):
-    status: str
-    database: str
-
-
-class TopicResponse(BaseModel):
-    topic_id: int
-    topic: str
-    ispublic: int
-
-
-class DepartmentResponse(BaseModel):
-    id: int
-    name: str
-
-
-class StatusResponse(BaseModel):
-    id: int
-    name: str
-    state: str
-
-
-class TicketItem(BaseModel):
-    ticket_id: int
-    number: str
-    created: datetime
-    status_name: str
-    topic_name: Optional[str] = None
-    dept_name: Optional[str] = None
-    owner_name: str
-    email: str
-
-
-class PaginatedTicketResponse(BaseModel):
-    total: int
-    limit: int
-    offset: int
-    next: Optional[str] = None
-    previous: Optional[str] = None
-    items: List[TicketItem]
-
-
-class TicketCreateResponse(BaseModel):
-    ticket_id: int
-    number: str
-
-
-class AttachmentResponse(BaseModel):
-    file_id: int
-
-
-class CloseResponse(BaseModel):
-    status: str
+    finally:
+        conn.close()
 
 
 # --- HEALTH CHECK ---
@@ -143,7 +90,8 @@ def list_help_topics():
         conn.close()
 
 
-@app.get("/departments", dependencies=[Depends(verify_token)], tags=["Listings"], response_model=List[DepartmentResponse])
+@app.get("/departments", dependencies=[Depends(verify_token)], tags=["Listings"],
+         response_model=List[DepartmentResponse])
 def list_departments():
     """Lists available Departments (e.g., Support, Finance)."""
     conn = engine.connect()
@@ -171,7 +119,8 @@ def list_statuses():
 
 # --- ENDPOINTS ---
 
-@app.get("/tickets/search", response_model=PaginatedTicketResponse, dependencies=[Depends(verify_token)], tags=["Search"])
+@app.get("/tickets/search", response_model=PaginatedTicketResponse, dependencies=[Depends(verify_token)],
+         tags=["Search"])
 def search_tickets(
         request: Request,  # Necessary to assemble the base URL
         status_id: Optional[int] = None,
@@ -240,7 +189,6 @@ def search_tickets(
             query_params['limit'] = str(limit)
             query_params['offset'] = str(new_offset)
             # Rebuild the base URL + query string
-            from urllib.parse import urlencode
             base_url = str(request.url).split('?')[0]
             return f"{base_url}?{urlencode(query_params)}"
 
@@ -302,7 +250,8 @@ def create_ticket(ticket: TicketCreate):
         conn.close()
 
 
-@app.post("/tickets/{ticket_id}/attach", dependencies=[Depends(verify_token)], tags=["Attachments"], response_model=AttachmentResponse)
+@app.post("/tickets/{ticket_id}/attach", dependencies=[Depends(verify_token)], tags=["Attachments"],
+          response_model=AttachmentResponse)
 async def add_attachment(ticket_id: int, file: UploadFile = File(...)):
     """Chunk logic for attachments in osTicket."""
     conn = engine.connect()
@@ -337,7 +286,8 @@ async def add_attachment(ticket_id: int, file: UploadFile = File(...)):
         conn.close()
 
 
-@app.put("/tickets/{ticket_id}/close", dependencies=[Depends(verify_token)], tags=["Status"], response_model=CloseResponse)
+@app.put("/tickets/{ticket_id}/close", dependencies=[Depends(verify_token)], tags=["Status"],
+         response_model=CloseResponse)
 def close_ticket(ticket_id: int):
     """Closes the ticket (Status ID 3)."""
     conn = engine.connect()
