@@ -18,15 +18,14 @@ from models import (AttachmentResponse, CloseResponse, DepartmentResponse,
                     HealthResponse, PaginatedTicketResponse, StatusResponse,
                     TicketCreate, TicketCreateResponse, TopicResponse, UserResponse, PaginatedUserResponse, TicketItem)
 from utils import make_url
-
+                     
 engine: Optional[create_engine] = None
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # This code runs on startup
     global engine
-
+    
     DB_USER = os.getenv("DB_USER")
     DB_PASSWORD = os.getenv("DB_PASSWORD")
     DB_HOST = os.getenv("DB_HOST")
@@ -65,7 +64,6 @@ async def verify_token(x_api_key: str = Header(...), request: Request = None):
 
     finally:
         conn.close()
-
 
 app = FastAPI(title="osTicket Ultimate Python API", version="0.0.1", lifespan=lifespan)
 
@@ -157,10 +155,8 @@ def list_users(
             JOIN ost_user_email ue ON u.id = ue.user_id
             {where_clause}
             ORDER BY u.created DESC, u.id DESC
-            LIMIT :limit OFFSET :offset
+            LIMIT {limit} OFFSET {offset}
         """
-        params["limit"] = limit
-        params["offset"] = offset
         results = conn.execute(text(data_sql), params).mappings().all()
 
         next_url = None
@@ -256,10 +252,8 @@ def list_tickets(
             LEFT JOIN ost_department d ON t.dept_id = d.id
             {where_clause}
             ORDER BY t.created DESC, t.ticket_id DESC
-            LIMIT :limit OFFSET :offset
+            LIMIT {limit} OFFSET {offset}
         """
-        params["limit"] = limit
-        params["offset"] = offset
         results = conn.execute(text(data_sql), params).mappings().all()
 
         next_url = None
@@ -324,10 +318,42 @@ def create_ticket(ticket: TicketCreate):
         if not user_exists:
             raise HTTPException(status_code=400, detail=f"User with id {ticket.user_id} does not exist.")
 
-        # Atomically get the next ticket number
-        conn.execute(text("UPDATE ost_sequence SET next = LAST_INSERT_ID(next + 1) WHERE name = 'ticket_number'"))
-        t_num_res = conn.execute(text("SELECT LAST_INSERT_ID()")).scalar()
-        t_num = str(t_num_res)
+        # --- Generate Ticket Number ---
+        config_query = text("SELECT `key`, `value` FROM `ost_config` WHERE `key` IN ('ticket_sequence_id', 'ticket_number_format')")
+        config_res = conn.execute(config_query).mappings().all()
+        config = {row['key']: row['value'] for row in config_res}
+        
+        sequence_id = config.get('ticket_sequence_id', 1)
+        number_format = config.get('ticket_number_format', '%SEQ')
+
+        seq_name_query = text("SELECT `name` FROM `ost_sequence` WHERE `id` = :id")
+        seq_name = conn.execute(seq_name_query, {"id": sequence_id}).scalar_one_or_none() or 'ticket_number'
+
+        conn.execute(text(f"UPDATE ost_sequence SET next = LAST_INSERT_ID(next + 1) WHERE name = '{seq_name}'"))
+        next_seq = conn.execute(text("SELECT LAST_INSERT_ID()")).scalar()
+
+        def format_ticket_number(mask, seq):
+            now = datetime.now()
+            
+            replacements = {
+                '%y': now.strftime('%y'),
+                '%Y': now.strftime('%Y'),
+                '%m': now.strftime('%m'),
+                '%d': now.strftime('%d'),
+            }
+            for key, value in replacements.items():
+                mask = mask.replace(key, value)
+            
+            if '#' in mask:
+                num_hashes = mask.count('#')
+                mask = mask.replace('#' * num_hashes, str(seq).zfill(num_hashes))
+            
+            if '%SEQ' in mask:
+                mask = mask.replace('%SEQ', str(seq))
+
+            return mask
+
+        t_num = format_ticket_number(number_format, next_seq)
 
         insert_topic_id = ticket.topic_id if ticket.topic_id is not None else 1
         insert_dept_id = ticket.dept_id if ticket.dept_id is not None else 1
@@ -338,11 +364,11 @@ def create_ticket(ticket: TicketCreate):
                                 """), {"n": t_num, "user_id": ticket.user_id, "dept_id": insert_dept_id,
                                        "topic": insert_topic_id})
         tid = res.lastrowid
-
+        
         conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:id, 'T', NOW())"),
                      {"id": tid})
         thid = conn.execute(text("SELECT LAST_INSERT_ID()")).scalar()
-
+        
         conn.execute(text("""
                           INSERT INTO ost_thread_entry (thread_id, type, body, poster, created, updated)
                           VALUES (:thid, 'M', :body, :p, NOW(), NOW())
@@ -352,10 +378,10 @@ def create_ticket(ticket: TicketCreate):
         return {"ticket_id": tid, "number": t_num}
     except HTTPException as e:
         trans.rollback()
-        raise e  # Re-raise the HTTPException
+        raise e
     except Exception as e:
         trans.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
     finally:
         conn.close()
 

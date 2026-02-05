@@ -4,60 +4,56 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from fastapi.testclient import TestClient
 
-# --- 1. Load Test Environment ---
-# This ensures that the .env.test file is loaded for all tests
-# before any other code (like main.py) is imported.
-@pytest.fixture(scope="session", autouse=True)
-def load_test_env():
-    """
-    A session-scoped fixture to load the .env.test file once for the entire
-    test session. `autouse=True` means it will be automatically used without
-    needing to be requested in test functions.
-    """
-    load_dotenv(dotenv_path=".env.test")
+# Load .env.test at the very beginning of the session
+load_dotenv(dotenv_path=".env.test")
 
-
-# --- 2. Database Cleaning Fixture ---
-@pytest.fixture(scope="function")
-def clean_db():
+@pytest.fixture(scope="session")
+def db_engine():
     """
-    A function-scoped fixture to ensure the database is clean before each test.
-    It connects to the test database, disables foreign key checks, truncates
-    all tables, and then re-enables foreign key checks.
+    Creates a single, session-scoped database engine for all tests.
     """
-    # Get DB connection details from the now-loaded test environment
     db_url = f"mysql+pymysql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
     engine = create_engine(db_url)
+    yield engine
+    engine.dispose()
 
-    with engine.connect() as conn:
-        with conn.begin(): # Start a transaction
-            # Get all table names
-            tables = conn.execute(text("SHOW TABLES;")).fetchall()
-            table_names = [table[0] for table in tables]
-
-            # Temporarily disable foreign key checks to allow truncation
-            conn.execute(text("SET FOREIGN_KEY_CHECKS = 0;"))
-            
-            # Truncate all tables
-            for table_name in table_names:
-                conn.execute(text(f"TRUNCATE TABLE `{table_name}`;"))
-            
-            # Re-enable foreign key checks
-            conn.execute(text("SET FOREIGN_KEY_CHECKS = 1;"))
-    
-    yield # This is where the test runs
-
-    # You could add cleanup code here if needed, but truncation handles it.
-
-
-# --- 3. API Client Fixture ---
 @pytest.fixture(scope="function")
-def client(clean_db):
+def db_conn(db_engine):
     """
-    A function-scoped fixture that provides a TestClient instance for each test.
-    It depends on `clean_db` to ensure the database is pristine before the
-    client is created and the test runs.
+    Provides a database connection for a test function and handles cleanup.
+    The test function is responsible for its own transaction management.
     """
-    from main import app # Import the app inside the fixture
+    connection = db_engine.connect()
+    yield connection  # The test runs here, using this connection
+
+    # --- Teardown: Clean the database after each test is complete ---
+    # This runs after the test function has finished
+    transaction = connection.begin()
+    try:
+        tables = connection.execute(text("SHOW TABLES;")).fetchall()
+        table_names = [table[0] for table in tables]
+        connection.execute(text("SET FOREIGN_KEY_CHECKS = 0;"))
+        for table_name in table_names:
+            connection.execute(text(f"TRUNCATE TABLE `{table_name}`;"))
+        connection.execute(text("SET FOREIGN_KEY_CHECKS = 1;"))
+        transaction.commit()
+    except Exception:
+        transaction.rollback()
+        raise
+    finally:
+        connection.close()
+
+@pytest.fixture(scope="function")
+def client(db_engine, monkeypatch):
+    """
+    Provides a TestClient that is configured to use the same database engine
+    as the test fixtures. This is the key to solving test isolation issues.
+    """
+    from main import app
+    import main as main_module
+
+    # Monkeypatch the engine used by the app to be the same as the test engine
+    monkeypatch.setattr(main_module, "engine", db_engine)
+
     with TestClient(app) as c:
         yield c
