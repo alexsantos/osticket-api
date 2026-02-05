@@ -244,7 +244,7 @@ def list_tickets(
         data_sql = f"""
             SELECT t.ticket_id, t.number, t.created, t.status_id, s.name as status_name, 
                    t.topic_id, ht.topic as topic_name, t.dept_id, d.name as dept_name, 
-                   t.user_id, u.name as owner_name, ue.address as email
+                   t.user_id, u.name as user_name, ue.address as user_email
             FROM ost_ticket t
             JOIN ost_ticket_status s ON t.status_id = s.id
             JOIN ost_user u ON t.user_id = u.id
@@ -285,7 +285,7 @@ def get_ticket(ticket_id: int):
         query = """
                 SELECT t.ticket_id, t.number, t.created, t.status_id, s.name as status_name, 
                        t.topic_id, ht.topic as topic_name, t.dept_id, d.name as dept_name, 
-                       t.user_id, u.name as owner_name, ue.address as email
+                       t.user_id, u.name as user_name, ue.address as user_email
                 FROM ost_ticket t
                          JOIN ost_ticket_status s ON t.status_id = s.id
                          JOIN ost_user u ON t.user_id = u.id

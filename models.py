@@ -71,8 +71,8 @@ class TicketItem(BaseModel):
     dept_id: Optional[int] = None
     dept_name: Optional[str] = None
     user_id: int
-    owner_name: str
-    email: str
+    user_name: str
+    user_email: str
 
 
 class PaginatedTicketResponse(BaseModel):
