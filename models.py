@@ -64,9 +64,13 @@ class TicketItem(BaseModel):
     ticket_id: int
     number: str
     created: datetime
+    status_id: int
     status_name: str
+    topic_id: Optional[int] = None
     topic_name: Optional[str] = None
+    dept_id: Optional[int] = None
     dept_name: Optional[str] = None
+    user_id: int
     owner_name: str
     email: str
 

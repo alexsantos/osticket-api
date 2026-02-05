@@ -242,8 +242,9 @@ def list_tickets(
         total_records = conn.execute(text(count_sql), params).scalar()
 
         data_sql = f"""
-            SELECT t.ticket_id, t.number, t.created, s.name as status_name, 
-                   ht.topic as topic_name, d.name as dept_name, u.name as owner_name, ue.address as email
+            SELECT t.ticket_id, t.number, t.created, t.status_id, s.name as status_name, 
+                   t.topic_id, ht.topic as topic_name, t.dept_id, d.name as dept_name, 
+                   t.user_id, u.name as owner_name, ue.address as email
             FROM ost_ticket t
             JOIN ost_ticket_status s ON t.status_id = s.id
             JOIN ost_user u ON t.user_id = u.id
@@ -282,14 +283,9 @@ def get_ticket(ticket_id: int):
     conn = engine.connect()
     try:
         query = """
-                SELECT t.ticket_id,
-                       t.number,
-                       t.created,
-                       s.name     as status_name,
-                       ht.topic   as topic_name,
-                       d.name     as dept_name,
-                       u.name     as owner_name,
-                       ue.address as email
+                SELECT t.ticket_id, t.number, t.created, t.status_id, s.name as status_name, 
+                       t.topic_id, ht.topic as topic_name, t.dept_id, d.name as dept_name, 
+                       t.user_id, u.name as owner_name, ue.address as email
                 FROM ost_ticket t
                          JOIN ost_ticket_status s ON t.status_id = s.id
                          JOIN ost_user u ON t.user_id = u.id
@@ -381,7 +377,7 @@ def create_ticket(ticket: TicketCreate):
         raise e
     except Exception as e:
         trans.rollback()
-        raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
