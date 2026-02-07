@@ -25,6 +25,13 @@ engine: Optional[create_engine] = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    Manages the application's lifespan events.
+
+    On startup, it loads environment variables, establishes a database connection pool,
+    and sets up an event listener to ensure all new connections use UTF-8.
+    On shutdown, it disposes of the database connection pool.
+    """
     # This code runs on startup
     global engine
 
@@ -56,8 +63,14 @@ async def lifespan(app: FastAPI):
 # --- SECURITY (Dependency Injection) ---
 async def verify_token(x_api_key: str = Header(...), request: Request = None):
     """
-    Verify the API key against the osTicket database.
-    This function checks if the API key is valid, active, and matches the client's IP address.
+    Verify an API key provided in the `X-API-Key` header.
+
+    This security dependency checks the key against the `ost_api_key` table for:
+    - Existence
+    - Active status (`isactive` flag)
+    - IP address restrictions (`ipaddr` column)
+
+    Raises an HTTPException with status 401, 403, or 404 if validation fails.
     """
     conn = engine.connect()
     try:
@@ -139,8 +152,18 @@ def list_users(
         request: Request,
         email: Optional[str] = None,
         limit: int = Query(50, ge=1, le=500),
-        offset: int = Query(0, ge=0)
+        offset: int = Query(0, ge=0),
 ):
+    """
+    Retrieve a paginated list of users.
+
+    This endpoint allows you to list all users in the system and provides
+    pagination controls. You can also filter the results by email address.
+
+    - **email**: Filter users by a specific email address.
+    - **limit**: The maximum number of users to return in a single page.
+    - **offset**: The number of users to skip before starting to collect the results.
+    """
     conn = engine.connect()
     try:
         where_clauses = []
@@ -194,6 +217,11 @@ def list_users(
 
 @app.get("/users/{user_id}", response_model=UserResponse, dependencies=[Depends(verify_token)], tags=["Users"])
 def get_user(user_id: int):
+    """
+    Retrieve a single user by their unique ID.
+
+    Provides detailed information for a specific user. Returns a 404 error if the user cannot be found.
+    """
     conn = engine.connect()
     try:
         query = """
@@ -221,8 +249,25 @@ def list_tickets(
         dept_id: Optional[List[int]] = Depends(CommaSeparatedInts("dept_id")),
         email: Optional[str] = None,
         limit: int = Query(50, ge=1, le=500),
-        offset: int = Query(0, ge=0)
+        offset: int = Query(0, ge=0),
 ):
+    """
+    Retrieve a paginated list of tickets with powerful filtering capabilities.
+
+    This endpoint allows you to search for tickets based on standard fields like status,
+    topic, and department, as well as any custom form fields defined in osTicket.
+
+    - **Standard Filters**: `status_id`, `topic_id`, `dept_id`, and `email`. These can accept
+      a single ID or a comma-separated list of IDs for multi-value filtering.
+    - **Custom Field Filters**: Any other query parameter is treated as a custom field filter.
+      For example, `?order_id=123` will search for tickets where the custom field named
+      `order_id` has the value `123`. Custom fields also support multi-value searches
+      (e.g., `?EFR=Value1,Value2`).
+    - **Pagination**: Use `limit` and `offset` to control the result set size and navigate
+      through pages.
+
+    The response includes the list of tickets, pagination details, and any associated custom fields for each ticket.
+    """
     conn = engine.connect()
     try:
         where_clauses = []
@@ -386,6 +431,12 @@ def list_tickets(
 
 @app.get("/tickets/{ticket_id}", response_model=TicketItem, dependencies=[Depends(verify_token)], tags=["Tickets"])
 def get_ticket(ticket_id: int):
+    """
+    Retrieve a single ticket by its unique ID.
+
+    Provides detailed information for a specific ticket, including its status, topic,
+    department, owner, and all associated custom field data. Returns a 404 error if the ticket cannot be found.
+    """
     with engine.connect() as conn:
         query = """
                 SELECT t.ticket_id,
@@ -448,7 +499,13 @@ def get_ticket(ticket_id: int):
 
 @app.post("/tickets", dependencies=[Depends(verify_token)], tags=["Tickets"], response_model=TicketCreateResponse)
 def create_ticket(ticket: TicketCreate):
-    """Creates ticket, thread and subject."""
+    """
+    Create a new ticket in the system.
+
+    This endpoint creates a new ticket, its initial thread entry, and assigns it a ticket number
+    based on the sequence and format configured in the osTicket admin panel.
+    It requires a valid `user_id` and will raise an error if the user does not exist.
+    """
     with engine.connect() as conn:
         with conn.begin() as trans:
             try:
@@ -535,7 +592,12 @@ def _generate_ticket_number(conn) -> str:
 @app.post("/tickets/{ticket_id}/attach", dependencies=[Depends(verify_token)], tags=["Tickets"],
           response_model=AttachmentResponse)
 async def add_attachment(ticket_id: int, file: UploadFile = File(...)):
-    """Chunk logic for attachments in osTicket."""
+    """
+    Attach a file to the latest entry in a ticket's thread.
+
+    This endpoint uploads a file, creates the necessary records in `ost_file` and
+    `ost_file_chunk`, and links the file as an attachment to the most recent message or note in the ticket's thread.
+    """
     conn = engine.connect()
     trans = conn.begin()
     try:
@@ -569,7 +631,12 @@ async def add_attachment(ticket_id: int, file: UploadFile = File(...)):
 @app.put("/tickets/{ticket_id}/close", dependencies=[Depends(verify_token)], tags=["Tickets"],
          response_model=CloseResponse)
 def close_ticket(ticket_id: int):
-    """Closes the ticket (Status ID 3)."""
+    """
+    Close a ticket.
+
+    This is a convenience endpoint that sets the ticket's status to 'closed' (typically status_id 3)
+    and updates its `closed` and `updated` timestamps.
+    """
     conn = engine.connect()
     try:
         conn.execute(text("UPDATE ost_ticket SET status_id = 3, closed = NOW(), updated = NOW() WHERE ticket_id = :id"),

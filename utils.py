@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Callable
 from urllib.parse import urlencode
 
 from fastapi import Query, Request, HTTPException
@@ -13,7 +13,7 @@ def make_url(request: Request, limit: int, offset: int) -> str:
     return f"{base_url}?{urlencode(query_params)}"
 
 
-def CommaSeparatedInts(param_name: str) -> List[int]:
+def CommaSeparatedInts(param_name: str) -> Callable[..., Optional[List[int]]]:
     """
     A dependency that parses a comma-separated list of integers from a query parameter.
     It also gracefully handles repeated query parameters (e.g., ?id=1&id=2).
