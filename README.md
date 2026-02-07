@@ -171,20 +171,33 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
 
 -   **GET /tickets**
     -   **Description:** Lists all tickets with pagination.
-    -   **Query Parameters:**
-        -   `status_id` (optional): Filter by status ID.
-        -   `topic_id` (optional): Filter by topic ID.
-        -   `dept_id` (optional): Filter by department ID.
+    -   **Standard Query Parameters:**
+        -   `status_id`, `topic_id`, `dept_id` (optional): Filter by one or more IDs. You can provide a single ID, a comma-separated list (`?status_id=1,3`), or repeat the parameter (`?status_id=1&status_id=3`).
         -   `email` (optional): Filter by the ticket owner's email address.
         -   `limit` (optional, default: 50): The maximum number of tickets to return.
         -   `offset` (optional, default: 0): The starting point for pagination.
-    -   **Example:**
-        ```bash
-        curl -X GET "http://localhost:8080/tickets?email=user@example.com&limit=10" -H "X-API-Key: your_osTicket_api_key"
-        ```
+    -   **Custom Field Filtering:**
+        -   This endpoint supports searching by any custom field created in osTicket's "Dynamic Forms".
+        -   To filter by a custom field, use the field's `name` (the variable name set in the form builder) as a query parameter.
+        -   Custom field filters also support single or multiple values (comma-separated or repeated).
+    -   **Response Data:**
+        -   The response for each ticket includes a `custom_fields` object containing the parsed data from any associated custom forms.
+    -   **Examples:**
+        -   **Basic Search:**
+            ```bash
+            curl -X GET "http://localhost:8080/tickets?status_id=1&dept_id=22" -H "X-API-Key: your_osTicket_api_key"
+            ```
+        -   **Custom Field Search:**
+            ```bash
+            curl -X GET "http://localhost:8080/tickets?order_id=XYZ-123" -H "X-API-Key: your_osTicket_api_key"
+            ```
+        -   **Multi-Value Custom Field Search (with special characters):**
+            ```bash
+            curl -X GET "http://localhost:8080/tickets?EFR=Médis,Multicare" -H "X-API-Key: your_osTicket_api_key"
+            ```
 
 -   **GET /tickets/{ticket_id}**
-    -   **Description:** Retrieves a single ticket by its ID.
+    -   **Description:** Retrieves a single ticket by its ID, including all associated custom field data.
     -   **Example:**
         ```bash
         curl -X GET "http://localhost:8080/tickets/123" -H "X-API-Key: your_osTicket_api_key"

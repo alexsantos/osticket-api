@@ -1,11 +1,8 @@
 import base64
 import hashlib
 import os
-import random
-import string
 from datetime import datetime
 from typing import List, Optional
-from urllib.parse import urlencode
 import json
 from contextlib import asynccontextmanager
 
@@ -111,13 +108,10 @@ def health_check():
 @app.get("/topics", dependencies=[Depends(verify_token)], tags=["Listings"], response_model=List[TopicResponse])
 def list_help_topics():
     """Lists active Help Topics (e.g., General Support, Sales)."""
-    conn = engine.connect()
-    try:
+    with engine.connect() as conn:
         query = text("SELECT topic_id, topic, ispublic FROM ost_help_topic WHERE isactive = 1 ORDER BY topic ASC")
         results = conn.execute(query).mappings().all()
         return [dict(row) for row in results]
-    finally:
-        conn.close()
 
 
 @app.get("/departments", dependencies=[Depends(verify_token)], tags=["Listings"],
