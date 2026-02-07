@@ -6,26 +6,28 @@ import string
 from datetime import datetime
 from typing import List, Optional
 from urllib.parse import urlencode
+import json
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import (Depends, FastAPI, File, Header, HTTPException, Query,
                      Request, UploadFile)
 from fastapi.responses import RedirectResponse
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, event
 
 from models import (AttachmentResponse, CloseResponse, DepartmentResponse,
                     HealthResponse, PaginatedTicketResponse, StatusResponse,
                     TicketCreate, TicketCreateResponse, TopicResponse, UserResponse, PaginatedUserResponse, TicketItem)
-from utils import make_url
-                     
+from utils import make_url, CommaSeparatedInts
+
 engine: Optional[create_engine] = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # This code runs on startup
     global engine
-    
+
     DB_USER = os.getenv("DB_USER")
     DB_PASSWORD = os.getenv("DB_PASSWORD")
     DB_HOST = os.getenv("DB_HOST")
@@ -35,8 +37,17 @@ async def lifespan(app: FastAPI):
     if not all([DB_USER, DB_PASSWORD, DB_HOST, DB_NAME]):
         raise ValueError("Database environment variables are not fully set.")
 
-    DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}?charset=utf8mb4"
     engine = create_engine(DB_URL, pool_pre_ping=True)
+
+    # This event listener ensures that every connection uses the correct UTF-8 encoding and collation.
+    # This is crucial for correctly handling special characters like 'é' in searches.
+    @event.listens_for(engine, "connect")
+    def connect(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("SET NAMES 'utf8mb4' COLLATE 'utf8mb4_unicode_ci'")
+        cursor.close()
+
     yield
     # This code runs on shutdown
     engine.dispose()
@@ -64,6 +75,7 @@ async def verify_token(x_api_key: str = Header(...), request: Request = None):
 
     finally:
         conn.close()
+
 
 app = FastAPI(title="osTicket Ultimate Python API", version="0.0.1", lifespan=lifespan)
 
@@ -204,9 +216,9 @@ def get_user(user_id: int):
          tags=["Tickets"])
 def list_tickets(
         request: Request,
-        status_id: Optional[int] = None,
-        topic_id: Optional[int] = None,
-        dept_id: Optional[int] = None,
+        status_id: Optional[List[int]] = Depends(CommaSeparatedInts("status_id")),
+        topic_id: Optional[List[int]] = Depends(CommaSeparatedInts("topic_id")),
+        dept_id: Optional[List[int]] = Depends(CommaSeparatedInts("dept_id")),
         email: Optional[str] = None,
         limit: int = Query(50, ge=1, le=500),
         offset: int = Query(0, ge=0)
@@ -216,18 +228,67 @@ def list_tickets(
         where_clauses = []
         params = {}
         if status_id:
-            where_clauses.append("t.status_id = :status_id")
-            params["status_id"] = status_id
+            where_clauses.append("t.status_id IN :status_ids")
+            params["status_ids"] = tuple(status_id)
         if topic_id:
-            where_clauses.append("t.topic_id = :topic_id")
-            params["topic_id"] = topic_id
+            where_clauses.append("t.topic_id IN :topic_ids")
+            params["topic_ids"] = tuple(topic_id)
         if dept_id:
-            where_clauses.append("t.dept_id = :dept_id")
-            params["dept_id"] = dept_id
+            where_clauses.append("t.dept_id IN :dept_ids")
+            params["dept_ids"] = tuple(dept_id)
         if email:
             where_clauses.append("ue.address = :email")
             params["email"] = email
 
+        # --- Custom Fields Filtering ---
+        custom_field_joins = ""
+        custom_field_params = {}
+        known_params = {'status_id', 'topic_id', 'dept_id', 'email', 'limit', 'offset'}
+
+        # Identify custom field filters from the query parameters
+        custom_field_keys = [k for k in request.query_params.keys() if k not in known_params]
+
+        # Dynamically build joins and where clauses for each custom field
+        for i, field_name in enumerate(custom_field_keys):
+            join_alias_fe = f"fe{i}"
+            join_alias_fev = f"fev{i}"
+            join_alias_ff = f"ff{i}"
+            param_name_field = f"cf_name_{i}"
+
+            custom_field_joins += f"""
+                JOIN ost_form_entry {join_alias_fe} ON ({join_alias_fe}.object_id = t.ticket_id AND {join_alias_fe}.object_type = 'T')
+                JOIN ost_form_entry_values {join_alias_fev} ON {join_alias_fev}.entry_id = {join_alias_fe}.id
+                JOIN ost_form_field {join_alias_ff} ON {join_alias_ff}.id = {join_alias_fev}.field_id
+            """
+
+            # Handle multiple values for a single custom field (e.g., ?EFR=Value1,Value2 or ?EFR=Value1&EFR=Value2)
+            search_values = request.query_params.getlist(field_name)
+            flat_values = [item for sublist in [v.split(',') for v in search_values] for item in sublist if item.strip()]
+
+            # Create a list of LIKE conditions for each value to handle JSON-encoded fields
+            like_conditions = []
+            for j, value in enumerate(flat_values):
+                param_name_val = f"cf_val_{i}_{j}"
+                # This condition intelligently handles both plain text and JSON-encoded choice fields.
+                # 1. It tries to extract the value from a JSON object (e.g., {"14":"Médis"}) and unescapes it.
+                # 2. If the field is not a JSON object, the COALESCE falls back to the raw value.
+                # 3. This ensures a clean, direct comparison against the user's search term.
+                like_conditions.append(f"COALESCE(JSON_UNQUOTE(JSON_EXTRACT(JSON_EXTRACT({join_alias_fev}.value, '$.*'), '$[0]')), {join_alias_fev}.value) LIKE :{param_name_val}")
+                custom_field_params[param_name_val] = f"%{value}%"
+
+            # Combine the LIKE conditions with OR
+            combined_likes = " OR ".join(like_conditions)
+
+            where_clauses.append(
+                f"""(
+                    {join_alias_ff}.name = :{param_name_field} AND ({combined_likes})
+                )"""
+            )
+            custom_field_params[param_name_field] = field_name
+
+        params.update(custom_field_params)
+
+        # --- Finalize WHERE clause after all filters are added ---
         where_clause = " AND ".join(where_clauses)
         if where_clause:
             where_clause = "WHERE " + where_clause
@@ -237,8 +298,10 @@ def list_tickets(
             FROM ost_ticket t
             JOIN ost_user u ON t.user_id = u.id
             JOIN ost_user_email ue ON u.id = ue.user_id
+            {custom_field_joins}
             {where_clause}
         """
+
         total_records = conn.execute(text(count_sql), params).scalar()
 
         data_sql = f"""
@@ -251,11 +314,54 @@ def list_tickets(
             JOIN ost_user_email ue ON u.id = ue.user_id
             LEFT JOIN ost_help_topic ht ON t.topic_id = ht.topic_id
             LEFT JOIN ost_department d ON t.dept_id = d.id
+            {custom_field_joins}
             {where_clause}
             ORDER BY t.created DESC, t.ticket_id DESC
             LIMIT {limit} OFFSET {offset}
         """
+
         results = conn.execute(text(data_sql), params).mappings().all()
+
+        # --- Fetch and Attach Custom Fields ---
+        ticket_ids = [r["ticket_id"] for r in results]
+        final_items = [dict(r) for r in results]
+
+        if ticket_ids:
+            custom_fields_query = text("""
+                SELECT
+                    fe.object_id as ticket_id,
+                    ff.name,
+                    fev.value
+                FROM
+                    ost_form_entry fe
+                JOIN
+                    ost_form_entry_values fev ON fe.id = fev.entry_id
+                JOIN
+                    ost_form_field ff ON fev.field_id = ff.id
+                WHERE
+                    fe.object_id IN :ticket_ids
+                    AND fe.object_type = 'T'
+            """)
+            custom_fields_results = conn.execute(custom_fields_query, {"ticket_ids": tuple(ticket_ids)}).mappings().all()
+
+            # Organize custom fields by ticket_id
+            custom_fields_map = {tid: {} for tid in ticket_ids}
+            for cf in custom_fields_results:
+                # For JSON-encoded fields, try to extract the user-friendly value
+                try:
+                    parsed_val = json.loads(cf['value'])
+                    # If it's a dictionary (like a dropdown choice), extract the value.
+                    # Otherwise (if it's a number, string, etc.), use the parsed value directly.
+                    if isinstance(parsed_val, dict) and parsed_val:
+                        custom_fields_map[cf['ticket_id']][cf['name']] = next(iter(parsed_val.values()))
+                    else:
+                        custom_fields_map[cf['ticket_id']][cf['name']] = parsed_val
+                except (json.JSONDecodeError, StopIteration, TypeError):
+                    custom_fields_map[cf['ticket_id']][cf['name']] = cf['value']
+
+            # Attach the custom fields to the corresponding ticket items
+            for item in final_items:
+                item['custom_fields'] = custom_fields_map.get(item['ticket_id'], {})
 
         next_url = None
         if offset + limit < total_records:
@@ -272,7 +378,7 @@ def list_tickets(
             "offset": offset,
             "next": next_url,
             "previous": prev_url,
-            "items": [dict(r) for r in results]
+            "items": final_items
         }
     finally:
         conn.close()
@@ -280,12 +386,20 @@ def list_tickets(
 
 @app.get("/tickets/{ticket_id}", response_model=TicketItem, dependencies=[Depends(verify_token)], tags=["Tickets"])
 def get_ticket(ticket_id: int):
-    conn = engine.connect()
-    try:
+    with engine.connect() as conn:
         query = """
-                SELECT t.ticket_id, t.number, t.created, t.status_id, s.name as status_name, 
-                       t.topic_id, ht.topic as topic_name, t.dept_id, d.name as dept_name, 
-                       t.user_id, u.name as user_name, ue.address as user_email
+                SELECT t.ticket_id,
+                       t.number,
+                       t.created,
+                       t.status_id,
+                       s.name     as status_name,
+                       t.topic_id,
+                       ht.topic   as topic_name,
+                       t.dept_id,
+                       d.name     as dept_name,
+                       t.user_id,
+                       u.name     as user_name,
+                       ue.address as user_email
                 FROM ost_ticket t
                          JOIN ost_ticket_status s ON t.status_id = s.id
                          JOIN ost_user u ON t.user_id = u.id
@@ -297,89 +411,125 @@ def get_ticket(ticket_id: int):
         result = conn.execute(text(query), {"ticket_id": ticket_id}).mappings().first()
         if not result:
             raise HTTPException(status_code=404, detail="Ticket not found")
-        return dict(result)
-    finally:
-        conn.close()
+
+        final_item = dict(result)
+
+        # --- Fetch and Attach Custom Fields for the single ticket ---
+        custom_fields_query = text("""
+            SELECT
+                ff.name,
+                fev.value
+            FROM
+                ost_form_entry fe
+            JOIN
+                ost_form_entry_values fev ON fe.id = fev.entry_id
+            JOIN
+                ost_form_field ff ON fev.field_id = ff.id
+            WHERE
+                fe.object_id = :ticket_id
+                AND fe.object_type = 'T'
+        """)
+        custom_fields_results = conn.execute(custom_fields_query, {"ticket_id": ticket_id}).mappings().all()
+
+        custom_fields_map = {}
+        for cf in custom_fields_results:
+            try:
+                parsed_val = json.loads(cf['value'])
+                if isinstance(parsed_val, dict) and parsed_val:
+                    custom_fields_map[cf['name']] = next(iter(parsed_val.values()))
+                else:
+                    custom_fields_map[cf['name']] = parsed_val
+            except (json.JSONDecodeError, StopIteration, TypeError):
+                custom_fields_map[cf['name']] = cf['value']
+
+        final_item['custom_fields'] = custom_fields_map
+        return final_item
 
 
 @app.post("/tickets", dependencies=[Depends(verify_token)], tags=["Tickets"], response_model=TicketCreateResponse)
 def create_ticket(ticket: TicketCreate):
     """Creates ticket, thread and subject."""
-    conn = engine.connect()
-    trans = conn.begin()
-    try:
-        # --- Validate user_id ---
-        user_exists = conn.execute(text("SELECT id FROM ost_user WHERE id = :user_id"),
-                                   {"user_id": ticket.user_id}).first()
-        if not user_exists:
-            raise HTTPException(status_code=400, detail=f"User with id {ticket.user_id} does not exist.")
+    with engine.connect() as conn:
+        with conn.begin() as trans:
+            try:
+                # --- Validate user_id ---
+                user_exists = conn.execute(text("SELECT id FROM ost_user WHERE id = :user_id"),
+                                           {"user_id": ticket.user_id}).first()
+                if not user_exists:
+                    raise HTTPException(status_code=400, detail=f"User with id {ticket.user_id} does not exist.")
 
-        # --- Generate Ticket Number ---
-        config_query = text("SELECT `key`, `value` FROM `ost_config` WHERE `key` IN ('ticket_sequence_id', 'ticket_number_format')")
-        config_res = conn.execute(config_query).mappings().all()
-        config = {row['key']: row['value'] for row in config_res}
-        
-        sequence_id = config.get('ticket_sequence_id', 1)
-        number_format = config.get('ticket_number_format', '%SEQ')
+                t_num = _generate_ticket_number(conn)
 
-        seq_name_query = text("SELECT `name` FROM `ost_sequence` WHERE `id` = :id")
-        seq_name = conn.execute(seq_name_query, {"id": sequence_id}).scalar_one_or_none() or 'ticket_number'
+                insert_topic_id = ticket.topic_id if ticket.topic_id is not None else 1
+                insert_dept_id = ticket.dept_id if ticket.dept_id is not None else 1
 
-        conn.execute(text(f"UPDATE ost_sequence SET next = LAST_INSERT_ID(next + 1) WHERE name = '{seq_name}'"))
-        next_seq = conn.execute(text("SELECT LAST_INSERT_ID()")).scalar()
+                res = conn.execute(text("""
+                                        INSERT INTO ost_ticket (number, user_id, dept_id, topic_id, status_id, created, updated)
+                                        VALUES (:n, :user_id, :dept_id, :topic, 1, NOW(), NOW())
+                                        """), {"n": t_num, "user_id": ticket.user_id, "dept_id": insert_dept_id,
+                                               "topic": insert_topic_id})
+                tid = res.lastrowid
 
-        def format_ticket_number(mask, seq):
-            now = datetime.now()
-            
-            replacements = {
-                '%y': now.strftime('%y'),
-                '%Y': now.strftime('%Y'),
-                '%m': now.strftime('%m'),
-                '%d': now.strftime('%d'),
-            }
-            for key, value in replacements.items():
-                mask = mask.replace(key, value)
-            
-            if '#' in mask:
-                num_hashes = mask.count('#')
-                mask = mask.replace('#' * num_hashes, str(seq).zfill(num_hashes))
-            
-            if '%SEQ' in mask:
-                mask = mask.replace('%SEQ', str(seq))
+                conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:id, 'T', NOW())"),
+                             {"id": tid})
+                thid = conn.execute(text("SELECT LAST_INSERT_ID()")).scalar()
 
-            return mask
+                conn.execute(text("""
+                                  INSERT INTO ost_thread_entry (thread_id, type, body, poster, created, updated)
+                                  VALUES (:thid, 'M', :body, :p, NOW(), NOW())
+                                  """), {"thid": thid, "body": ticket.message, "p": "API"})
 
-        t_num = format_ticket_number(number_format, next_seq)
+                return {"ticket_id": tid, "number": t_num}
+            except HTTPException as e:
+                trans.rollback()
+                raise e
+            except Exception as e:
+                trans.rollback()
+                raise HTTPException(status_code=500, detail=str(e))
 
-        insert_topic_id = ticket.topic_id if ticket.topic_id is not None else 1
-        insert_dept_id = ticket.dept_id if ticket.dept_id is not None else 1
 
-        res = conn.execute(text("""
-                                INSERT INTO ost_ticket (number, user_id, dept_id, topic_id, status_id, created, updated)
-                                VALUES (:n, :user_id, :dept_id, :topic, 1, NOW(), NOW())
-                                """), {"n": t_num, "user_id": ticket.user_id, "dept_id": insert_dept_id,
-                                       "topic": insert_topic_id})
-        tid = res.lastrowid
-        
-        conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:id, 'T', NOW())"),
-                     {"id": tid})
-        thid = conn.execute(text("SELECT LAST_INSERT_ID()")).scalar()
-        
-        conn.execute(text("""
-                          INSERT INTO ost_thread_entry (thread_id, type, body, poster, created, updated)
-                          VALUES (:thid, 'M', :body, :p, NOW(), NOW())
-                          """), {"thid": thid, "body": ticket.message, "p": "API"})
+def _generate_ticket_number(conn) -> str:
+    """
+    Generates the next ticket number based on osTicket's sequence and format settings.
+    """
+    # --- Get osTicket Numbering Configuration ---
+    config_query = text(
+        "SELECT `key`, `value` FROM `ost_config` WHERE `key` IN ('ticket_sequence_id', 'ticket_number_format')")
+    config_res = conn.execute(config_query).mappings().all()
+    config = {row['key']: row['value'] for row in config_res}
 
-        trans.commit()
-        return {"ticket_id": tid, "number": t_num}
-    except HTTPException as e:
-        trans.rollback()
-        raise e
-    except Exception as e:
-        trans.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
+    sequence_id = config.get('ticket_sequence_id', 1)
+    number_format = config.get('ticket_number_format', '%SEQ')
+
+    # --- Get the Next Value from the Sequence ---
+    seq_name_query = text("SELECT `name` FROM `ost_sequence` WHERE `id` = :id")
+    seq_name = conn.execute(seq_name_query, {"id": sequence_id}).scalar_one_or_none() or 'ticket_number'
+
+    conn.execute(text(f"UPDATE ost_sequence SET next = LAST_INSERT_ID(next + 1) WHERE name = :seq_name"),
+                 {"seq_name": seq_name})
+    next_seq = conn.execute(text("SELECT LAST_INSERT_ID()")).scalar()
+
+    # --- Format the Number Based on the Mask ---
+    now = datetime.now()
+    mask = number_format
+
+    replacements = {
+        '%y': now.strftime('%y'),
+        '%Y': now.strftime('%Y'),
+        '%m': now.strftime('%m'),
+        '%d': now.strftime('%d'),
+    }
+    for key, value in replacements.items():
+        mask = mask.replace(key, value)
+
+    if '#' in mask:
+        num_hashes = mask.count('#')
+        mask = mask.replace('#' * num_hashes, str(next_seq).zfill(num_hashes))
+
+    if '%SEQ' in mask:
+        mask = mask.replace('%SEQ', str(next_seq))
+
+    return mask
 
 
 @app.post("/tickets/{ticket_id}/attach", dependencies=[Depends(verify_token)], tags=["Tickets"],

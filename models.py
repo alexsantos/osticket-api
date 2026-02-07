@@ -73,6 +73,7 @@ class TicketItem(BaseModel):
     user_id: int
     user_name: str
     user_email: str
+    custom_fields: Optional[dict] = None
 
 
 class PaginatedTicketResponse(BaseModel):

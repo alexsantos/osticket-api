@@ -5,7 +5,7 @@
       <driver-ref>mariadb</driver-ref>
       <synchronize>true</synchronize>
       <jdbc-driver>org.mariadb.jdbc.Driver</jdbc-driver>
-      <jdbc-url>jdbc:mariadb://jms1pvlostsr01.jms.jmellosaude.pt:3306/facre</jdbc-url>
+      <jdbc-url>jdbc:mariadb://jms1pvlostsr01.jms.jmellosaude.pt:3306/facre?charset=utf8mb4</jdbc-url>
       <jdbc-additional-properties>
         <property name="database.introspection.mysql.dbe5060" value="true" />
       </jdbc-additional-properties>

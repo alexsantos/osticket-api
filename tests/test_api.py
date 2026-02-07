@@ -430,3 +430,166 @@ def test_close_ticket(client: TestClient, db_conn):
     with db_conn.begin():
         result = db_conn.execute(text("SELECT status_id FROM ost_ticket WHERE ticket_id = :tid"), {"tid": ticket_id}).scalar()
         assert result == 3
+
+
+def test_get_ticket_with_various_custom_fields(client: TestClient, db_conn: Connection):
+    """
+    Tests the custom field parsing logic for various data types:
+    1. A JSON dictionary (dropdown choice).
+    2. A JSON number.
+    3. A plain text string (invalid JSON).
+    4. A NULL value.
+    """
+    with db_conn.begin():
+        # --- 1. Basic Setup ---
+        api_key = "custom-fields-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, default_email_id, name, created, updated) VALUES (0, 0, 'CF User', NOW(), NOW())"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'cf_user@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('CF-1', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, properties, created, updated) VALUES (1, 'Open', 'open', '{}', NOW(), NOW())"))
+        ticket_id = ticket_res.lastrowid
+
+        # --- 2. Form and Fields Setup ---
+        form_res = db_conn.execute(text("INSERT INTO ost_form (title, created, updated) VALUES ('Test Form', NOW(), NOW())"))
+        form_id = form_res.lastrowid
+        
+        field_choice_res = db_conn.execute(text("INSERT INTO ost_form_field (form_id, label, name, type, sort, created, updated) VALUES (:fid, 'Choice', 'choice_field', 'choices', 1, NOW(), NOW())"), {"fid": form_id})
+        field_choice_id = field_choice_res.lastrowid
+        field_number_res = db_conn.execute(text("INSERT INTO ost_form_field (form_id, label, name, type, sort, created, updated) VALUES (:fid, 'Number', 'number_field', 'text', 2, NOW(), NOW())"), {"fid": form_id})
+        field_number_id = field_number_res.lastrowid
+        field_text_res = db_conn.execute(text("INSERT INTO ost_form_field (form_id, label, name, type, sort, created, updated) VALUES (:fid, 'Text', 'text_field', 'text', 3, NOW(), NOW())"), {"fid": form_id})
+        field_text_id = field_text_res.lastrowid
+        field_empty_res = db_conn.execute(text("INSERT INTO ost_form_field (form_id, label, name, type, sort, created, updated) VALUES (:fid, 'Empty', 'empty_field', 'text', 4, NOW(), NOW())"), {"fid": form_id})
+        field_empty_id = field_empty_res.lastrowid
+
+        # --- 3. Form Entry and Values Setup ---
+        entry_res = db_conn.execute(text("INSERT INTO ost_form_entry (form_id, object_id, object_type, created, updated) VALUES (:fid, :tid, 'T', NOW(), NOW())"), {"fid": form_id, "tid": ticket_id})
+        entry_id = entry_res.lastrowid
+
+        db_conn.execute(text("INSERT INTO ost_form_entry_values (entry_id, field_id, value) VALUES (:eid, :fid, :val)"), {"eid": entry_id, "fid": field_choice_id, "val": '{"14":"Médis"}'})
+        db_conn.execute(text("INSERT INTO ost_form_entry_values (entry_id, field_id, value) VALUES (:eid, :fid, :val)"), {"eid": entry_id, "fid": field_number_id, "val": '123.45'})
+        db_conn.execute(text("INSERT INTO ost_form_entry_values (entry_id, field_id, value) VALUES (:eid, :fid, :val)"), {"eid": entry_id, "fid": field_text_id, "val": 'Just a string'})
+        db_conn.execute(text("INSERT INTO ost_form_entry_values (entry_id, field_id, value) VALUES (:eid, :fid, NULL)"), {"eid": entry_id, "fid": field_empty_id})
+
+    # --- 4. API Call and Assertions ---
+    headers = {"X-API-Key": api_key}
+    response = client.get(f"/tickets/{ticket_id}", headers=headers)
+    
+    assert response.status_code == 200
+    custom_fields = response.json()["custom_fields"]
+    
+    assert custom_fields["choice_field"] == "Médis"
+    assert custom_fields["number_field"] == 123.45
+    assert custom_fields["text_field"] == "Just a string"
+    assert custom_fields["empty_field"] is None
+
+
+def test_list_tickets_with_custom_field_filters(client: TestClient, db_conn: Connection):
+    """
+    Tests the custom field filtering logic in the list_tickets endpoint, covering:
+    1. Single text field search.
+    2. Single JSON choice field search (with special characters).
+    3. Multi-value search (comma-separated and repeated param).
+    4. Multi-field search (AND condition).
+    """
+    with db_conn.begin():
+        # --- 1. Basic Setup ---
+        api_key = "custom-filter-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+        db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, properties, created, updated) VALUES (1, 'Open', 'open', '{}', NOW(), NOW())"))
+
+        # --- 2. Form and Fields ---
+        form_res = db_conn.execute(text("INSERT INTO ost_form (title, created, updated) VALUES ('Search Form', NOW(), NOW())"))
+        form_id = form_res.lastrowid
+        field_efr_res = db_conn.execute(text("INSERT INTO ost_form_field (form_id, label, name, type, sort, created, updated) VALUES (:fid, 'EFR', 'EFR', 'choices', 1, NOW(), NOW())"), {"fid": form_id})
+        field_efr_id = field_efr_res.lastrowid
+        field_order_res = db_conn.execute(text("INSERT INTO ost_form_field (form_id, label, name, type, sort, created, updated) VALUES (:fid, 'Order ID', 'order_id', 'text', 2, NOW(), NOW())"), {"fid": form_id})
+        field_order_id = field_order_res.lastrowid
+
+        # --- 3. Tickets and Custom Field Values ---
+        # Ticket 1: Médis, ORDER-A
+        user1_res = db_conn.execute(text("INSERT INTO ost_user (org_id, default_email_id, name, created, updated) VALUES (0, 0, 'User A', NOW(), NOW())"))
+        user1_id = user1_res.lastrowid
+        email1_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'user_a@example.com')"), {"uid": user1_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email1_res.lastrowid, "uid": user1_id})
+        ticket1_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('T1', :uid, 1, NOW(), NOW())"), {"uid": user1_id})
+        ticket1_id = ticket1_res.lastrowid
+        entry1_res = db_conn.execute(text("INSERT INTO ost_form_entry (form_id, object_id, object_type, created, updated) VALUES (:fid, :tid, 'T', NOW(), NOW())"), {"fid": form_id, "tid": ticket1_id})
+        entry1_id = entry1_res.lastrowid
+        db_conn.execute(text("INSERT INTO ost_form_entry_values (entry_id, field_id, value) VALUES (:eid, :fid, :val)"), {"eid": entry1_id, "fid": field_efr_id, "val": '{"14":"Médis"}'})
+        db_conn.execute(text("INSERT INTO ost_form_entry_values (entry_id, field_id, value) VALUES (:eid, :fid, :val)"), {"eid": entry1_id, "fid": field_order_id, "val": 'ORDER-A'})
+
+        # Ticket 2: Multicare, ORDER-B
+        user2_res = db_conn.execute(text("INSERT INTO ost_user (org_id, default_email_id, name, created, updated) VALUES (0, 0, 'User B', NOW(), NOW())"))
+        user2_id = user2_res.lastrowid
+        email2_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'user_b@example.com')"), {"uid": user2_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email2_res.lastrowid, "uid": user2_id})
+        ticket2_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('T2', :uid, 1, NOW(), NOW())"), {"uid": user2_id})
+        ticket2_id = ticket2_res.lastrowid
+        entry2_res = db_conn.execute(text("INSERT INTO ost_form_entry (form_id, object_id, object_type, created, updated) VALUES (:fid, :tid, 'T', NOW(), NOW())"), {"fid": form_id, "tid": ticket2_id})
+        entry2_id = entry2_res.lastrowid
+        db_conn.execute(text("INSERT INTO ost_form_entry_values (entry_id, field_id, value) VALUES (:eid, :fid, :val)"), {"eid": entry2_id, "fid": field_efr_id, "val": '{"15":"Multicare"}'})
+        db_conn.execute(text("INSERT INTO ost_form_entry_values (entry_id, field_id, value) VALUES (:eid, :fid, :val)"), {"eid": entry2_id, "fid": field_order_id, "val": 'ORDER-B'})
+
+    headers = {"X-API-Key": api_key}
+
+    # Test 1: Search by JSON choice field with special character
+    response = client.get("/tickets?EFR=Médis", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert response.json()["items"][0]["number"] == "T1"
+
+    # Test 2: Search by multiple values for one field (comma-separated)
+    response = client.get("/tickets?EFR=Médis,Multicare", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["total"] == 2
+    assert {item["number"] for item in response.json()["items"]} == {"T1", "T2"}
+
+    # Test 3: Search by multiple fields (AND condition)
+    response = client.get("/tickets?EFR=Médis&order_id=ORDER-A", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert response.json()["items"][0]["number"] == "T1"
+
+    # Test 4: Search by multiple fields where only one matches (should return 0)
+    response = client.get("/tickets?EFR=Médis&order_id=ORDER-B", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["total"] == 0
+
+
+def test_list_tickets_with_json_number_custom_field(client: TestClient, db_conn: Connection):
+    """
+    Tests that the list_tickets endpoint correctly parses a custom field
+    whose value is a JSON-encoded number (e.g., '123.45').
+    This specifically covers the `else` block in the custom field parsing logic.
+    """
+    with db_conn.begin():
+        # --- Basic Setup ---
+        api_key = "json-number-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+        db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, properties, created, updated) VALUES (1, 'Open', 'open', '{}', NOW(), NOW())"))
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, default_email_id, name, created, updated) VALUES (0, 0, 'JSON User', NOW(), NOW())"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'json_user@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('T-JSON', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+
+        # --- Form and Field Setup ---
+        form_res = db_conn.execute(text("INSERT INTO ost_form (title, created, updated) VALUES ('JSON Number Form', NOW(), NOW())"))
+        form_id = form_res.lastrowid
+        field_res = db_conn.execute(text("INSERT INTO ost_form_field (form_id, label, name, type, sort, created, updated) VALUES (:fid, 'Amount', 'amount', 'text', 1, NOW(), NOW())"), {"fid": form_id})
+        field_id = field_res.lastrowid
+        entry_res = db_conn.execute(text("INSERT INTO ost_form_entry (form_id, object_id, object_type, created, updated) VALUES (:fid, :tid, 'T', NOW(), NOW())"), {"fid": form_id, "tid": ticket_id})
+        db_conn.execute(text("INSERT INTO ost_form_entry_values (entry_id, field_id, value) VALUES (:eid, :fid, '123.45')"), {"eid": entry_res.lastrowid, "fid": field_id})
+
+    headers = {"X-API-Key": api_key}
+    response = client.get(f"/tickets?status_id=1", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    item = response.json()["items"][0]
+    assert item["custom_fields"]["amount"] == 123.45
