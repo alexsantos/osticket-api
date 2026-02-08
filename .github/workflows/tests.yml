@@ -10,6 +10,18 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    services:
+          mysql:
+            image: mariadb:10
+            env:
+              MARIADB_ROOT_PASSWORD: testpassword
+              MARIADB_USER: testuser
+              MARIADB_PASSWORD: testpassword
+              MARIADB_DATABASE: osticket_test
+            ports:
+              - 3306:3306
+            options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -26,7 +38,11 @@ jobs:
         run: uv sync --all-extras --dev
 
       - name: Run tests with coverage
-        # Substitua 'seu_pacote' pelo nome da pasta do seu código fonte
+        env:
+          DB_USER: testuser
+          DB_PASSWORD: testpassword
+          DB_HOST: localhost
+          DB_NAME: osticket_test
         run: |
           uv run pytest --cov=. --cov-report=xml --cov-report=term-missing
 
