@@ -28,7 +28,7 @@ jobs:
       - name: Run tests with coverage
         # Substitua 'seu_pacote' pelo nome da pasta do seu código fonte
         run: |
-          uv run pytest --cov=. --cov-report=xml --cov-report=term-missing > pytest-report.txt
+          uv run pytest --cov=. --cov-report=xml --cov-report=term-missing
 
       - name: Pytest coverage comment
         uses: MishaKav/pytest-coverage-comment@main
