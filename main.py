@@ -617,7 +617,7 @@ async def add_attachment(ticket_id: int, file: UploadFile = File(...)):
         return {"file_id": fid}
     except Exception as e:
         trans.rollback()
-        raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}")
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing the attachment.")
     finally:
         conn.close()
 
