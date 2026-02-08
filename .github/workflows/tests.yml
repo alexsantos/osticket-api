@@ -20,6 +20,8 @@ jobs:
               MARIADB_DATABASE: osticket_test
             ports:
               - 3306:3306
+            volumes:
+              - ${{ github.workspace }}/tests/schema/install-mysql.sql:/docker-entrypoint-initdb.d/init.sql
             options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
 
     steps:
