@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ "main", "master" ]
 
+permissions:
+  contents: read        # For checkout and comparing commits
+  pull-requests: write  # For creating/updating PR comments
+
 jobs:
   test:
     runs-on: ubuntu-latest
