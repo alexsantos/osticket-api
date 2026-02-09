@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: read        # For checkout and comparing commits
-  pull-requests: write  # For creating/updating PR comments
 
 jobs:
   test:
@@ -48,9 +47,3 @@ jobs:
           DB_NAME: osticket_test
         run: |
           uv run pytest --cov=. --cov-report=xml --cov-report=term-missing
-
-      - name: Pytest coverage comment
-        uses: MishaKav/pytest-coverage-comment@main
-        with:
-          pytest-xml-coverage-path: ./coverage.xml
-          junitxml-path: ./pytest-report.txt
