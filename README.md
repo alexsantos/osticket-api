@@ -1,3 +1,5 @@
+![Tests](https://github.com/alexsantos/osticket-api/actions/workflows/tests.yml/badge.svg)
+![Coverage](https://codecov.io/gh/alexsantos/osticket-api/branch/main/graph/badge.svg)
 # osTicket Ultimate Python API
 
 This project provides a Python-based API for interacting with osTicket, a popular open-source ticketing system. It allows you to create, search, and manage tickets through a simple RESTful interface.
