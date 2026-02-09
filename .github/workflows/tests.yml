@@ -10,20 +10,6 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
-    services:
-          mysql:
-            image: mariadb:10
-            env:
-              MARIADB_ROOT_PASSWORD: testpassword
-              MARIADB_USER: testuser
-              MARIADB_PASSWORD: testpassword
-              MARIADB_DATABASE: osticket_test
-            ports:
-              - 3306:3306
-            volumes:
-              - ${{ github.workspace }}/tests/schema/install-mysql.sql:/docker-entrypoint-initdb.d/init.sql
-            options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -38,6 +24,17 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --all-extras --dev
+
+      - name: Start services
+        run: |
+          docker-compose -f docker-compose.test.yml up -d
+          
+          echo "Waiting for MySQL..."
+          until docker exec $(docker ps -q -f name=osticket-test-db) mysqladmin ping -h "localhost" -u testuser -p testpassword --silent; do
+            sleep 2
+            echo "Still initializing..."
+          done
+          echo "MySQL is ready!"
 
       - name: Run tests with coverage
         env:
