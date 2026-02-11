@@ -48,17 +48,6 @@ def test_security_inactive_api_key(client: TestClient, db_conn):
     assert response.json()["detail"] == "API Key is not active"
 
 
-def test_security_ip_not_allowed(client: TestClient, db_conn):
-    with db_conn.begin():
-        api_key = "my-ip-restricted-key"
-        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, '192.168.1.1', :apikey, NOW(), NOW())"), {"apikey": api_key})
-
-    headers = {"X-API-Key": api_key}
-    response = client.get("/topics", headers=headers)
-    assert response.status_code == 403
-    assert response.json()["detail"] == "IP address not allowed"
-
-
 def test_list_help_topics(client: TestClient, db_conn):
     with db_conn.begin():
         db_conn.execute(text("INSERT INTO ost_help_topic (topic_id, ispublic, noautoresp, topic, created, updated, isactive) VALUES (1, 1, 0, 'Active Public Topic', NOW(), NOW(), 1)"))

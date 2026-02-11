@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 from typing import List, Optional
 import json
+import importlib.metadata
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -65,13 +66,12 @@ async def verify_token(x_api_key: str = Header(...), request: Request = None):
     This security dependency checks the key against the `ost_api_key` table for:
     - Existence
     - Active status (`isactive` flag)
-    - IP address restrictions (`ipaddr` column)
 
-    Raises an HTTPException with status 401, 403, or 404 if validation fails.
+    Raises an HTTPException with status 401 or 403 if validation fails.
     """
     conn = engine.connect()
     try:
-        query = text("SELECT `id`, `apikey`, `isactive`, `ipaddr` FROM `ost_api_key` WHERE `apikey` = :apikey")
+        query = text("SELECT `id`, `apikey`, `isactive` FROM `ost_api_key` WHERE `apikey` = :apikey")
         result = conn.execute(query, {"apikey": x_api_key}).mappings().first()
 
         if not result:
@@ -80,14 +80,24 @@ async def verify_token(x_api_key: str = Header(...), request: Request = None):
         if not result["isactive"]:
             raise HTTPException(status_code=403, detail="API Key is not active")
 
-        if result["ipaddr"] and result["ipaddr"] != request.client.host:
-            raise HTTPException(status_code=403, detail="IP address not allowed")
-
     finally:
         conn.close()
 
 
-app = FastAPI(title="osTicket Ultimate Python API", version="0.0.1", lifespan=lifespan)
+def get_app_version():
+    """
+    Reads the application version from the installed package metadata.
+    Falls back to a default version if the package is not installed (e.g., in development).
+    """
+    try:
+        return importlib.metadata.version("osticket-api")
+    except importlib.metadata.PackageNotFoundError:
+        return "0.0.0-dev"
+
+
+app = FastAPI(
+    title="osTicket Ultimate Python API", version=get_app_version(), lifespan=lifespan
+)
 
 
 # --- HEALTH CHECK ---
