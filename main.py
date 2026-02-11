@@ -84,7 +84,7 @@ async def verify_token(x_api_key: str = Header(...), request: Request = None):
         conn.close()
 
 app = FastAPI(
-    title="osTicket Ultimate Python API", version="0.4.1", lifespan=lifespan
+    title="osTicket Ultimate Python API", version="0.5.0-dev", lifespan=lifespan
 )
 
 
