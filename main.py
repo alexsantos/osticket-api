@@ -83,20 +83,8 @@ async def verify_token(x_api_key: str = Header(...), request: Request = None):
     finally:
         conn.close()
 
-
-def get_app_version():
-    """
-    Reads the application version from the installed package metadata.
-    Falls back to a default version if the package is not installed (e.g., in development).
-    """
-    try:
-        return importlib.metadata.version("osticket-api")
-    except importlib.metadata.PackageNotFoundError:
-        return "0.0.0-dev"
-
-
 app = FastAPI(
-    title="osTicket Ultimate Python API", version=get_app_version(), lifespan=lifespan
+    title="osTicket Ultimate Python API", version="0.4.1", lifespan=lifespan
 )
 
 
