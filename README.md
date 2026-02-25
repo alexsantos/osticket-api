@@ -176,6 +176,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
     -   **Standard Query Parameters:**
         -   `status_id`, `topic_id`, `dept_id` (optional): Filter by one or more IDs. You can provide a single ID, a comma-separated list (`?status_id=1,3`), or repeat the parameter (`?status_id=1&status_id=3`).
         -   `email` (optional): Filter by the ticket owner's email address.
+        -   `updated_after`, `updated_before` (optional): Filter by the last update timestamp in `YYYY-MM-DDTHH:MM:SS` format.
         -   `limit` (optional, default: 50): The maximum number of tickets to return.
         -   `offset` (optional, default: 0): The starting point for pagination.
     -   **Custom Field Filtering:**
@@ -188,6 +189,10 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -   **Basic Search:**
             ```bash
             curl -X GET "http://localhost:8080/tickets?status_id=1&dept_id=22" -H "X-API-Key: your_osTicket_api_key"
+            ```
+        -   **Date Range Search:**
+            ```bash
+            curl -X GET "http://localhost:8080/tickets?updated_after=2023-10-27T00:00:00&updated_before=2023-10-28T00:00:00" -H "X-API-Key: your_osTicket_api_key"
             ```
         -   **Custom Field Search:**
             ```bash

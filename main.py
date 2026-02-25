@@ -84,7 +84,7 @@ async def verify_token(x_api_key: str = Header(...), request: Request = None):
         conn.close()
 
 app = FastAPI(
-    title="osTicket Ultimate Python API", version="0.4.1", lifespan=lifespan
+    title="osTicket Ultimate Python API", version="0.5.0-dev", lifespan=lifespan
 )
 
 
@@ -240,6 +240,8 @@ def list_tickets(
         topic_id: Optional[List[int]] = Depends(CommaSeparatedInts("topic_id")),
         dept_id: Optional[List[int]] = Depends(CommaSeparatedInts("dept_id")),
         email: Optional[str] = None,
+        updated_after: Optional[datetime] = Query(None, description="Filter tickets updated after this date (YYYY-MM-DDTHH:MM:SS)."),
+        updated_before: Optional[datetime] = Query(None, description="Filter tickets updated before this date (YYYY-MM-DDTHH:MM:SS)."),
         limit: int = Query(50, ge=1, le=500),
         offset: int = Query(0, ge=0),
 ):
@@ -250,7 +252,8 @@ def list_tickets(
     topic, and department, as well as any custom form fields defined in osTicket.
 
     - **Standard Filters**: `status_id`, `topic_id`, `dept_id`, and `email`. These can accept
-      a single ID or a comma-separated list of IDs for multi-value filtering.
+      a single ID or a comma-separated list of IDs for multi-value filtering. `updated_after` and `updated_before`
+      can be used to filter by the last update timestamp.
     - **Custom Field Filters**: Any other query parameter is treated as a custom field filter.
       For example, `?order_id=123` will search for tickets where the custom field named
       `order_id` has the value `123`. Custom fields also support multi-value searches
@@ -276,10 +279,16 @@ def list_tickets(
         if email:
             where_clauses.append("ue.address = :email")
             params["email"] = email
+        if updated_after:
+            where_clauses.append("t.updated >= :updated_after")
+            params["updated_after"] = updated_after
+        if updated_before:
+            where_clauses.append("t.updated <= :updated_before")
+            params["updated_before"] = updated_before
 
         # --- Custom Fields Filtering ---
         custom_field_joins = ""
-        custom_field_params = {}
+        custom_field_params = {} # type: ignore
         known_params = {'status_id', 'topic_id', 'dept_id', 'email', 'limit', 'offset'}
 
         # Identify custom field filters from the query parameters
@@ -343,7 +352,7 @@ def list_tickets(
 
         data_sql = f"""
             SELECT t.ticket_id, t.number, t.created, t.status_id, s.name as status_name, 
-                   t.topic_id, ht.topic as topic_name, t.dept_id, d.name as dept_name, 
+                   t.topic_id, ht.topic as topic_name, t.dept_id, d.name as dept_name, t.updated,
                    t.user_id, u.name as user_name, ue.address as user_email
             FROM ost_ticket t
             JOIN ost_ticket_status s ON t.status_id = s.id
@@ -438,6 +447,7 @@ def get_ticket(ticket_id: int):
                        s.name     as status_name,
                        t.topic_id,
                        ht.topic   as topic_name,
+                       t.updated,
                        t.dept_id,
                        d.name     as dept_name,
                        t.user_id,
