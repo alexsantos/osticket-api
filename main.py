@@ -4,7 +4,6 @@ import os
 from datetime import datetime
 from typing import List, Optional
 import json
-import importlib.metadata
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -84,7 +83,7 @@ async def verify_token(x_api_key: str = Header(...), request: Request = None):
         conn.close()
 
 app = FastAPI(
-    title="osTicket Ultimate Python API", version="0.5.0-dev", lifespan=lifespan
+    title="osTicket Ultimate Python API", version="0.6.0-dev", lifespan=lifespan
 )
 
 
