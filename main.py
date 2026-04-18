@@ -4,21 +4,34 @@ import os
 from datetime import datetime
 from typing import List, Optional
 import json
-import importlib.metadata
 from contextlib import asynccontextmanager
+
+MAX_UPLOAD_MB: int = 10
+MAX_UPLOAD_BYTES: int = MAX_UPLOAD_MB * 1024 * 1024
 
 from dotenv import load_dotenv
 from fastapi import (Depends, FastAPI, File, Header, HTTPException, Query,
                      Request, UploadFile)
 from fastapi.responses import RedirectResponse
 from sqlalchemy import create_engine, text, event
+from sqlalchemy.engine import Engine
 
 from models import (AttachmentResponse, CloseResponse, DepartmentResponse,
                     HealthResponse, PaginatedTicketResponse, StatusResponse,
                     TicketCreate, TicketCreateResponse, TopicResponse, UserResponse, PaginatedUserResponse, TicketItem)
 from utils import make_url, CommaSeparatedInts
 
-engine: Optional[create_engine] = None
+engine: Optional[Engine] = None
+
+
+def _get_status_id(conn, state: str) -> int:
+    status_id = conn.execute(
+        text("SELECT id FROM ost_ticket_status WHERE state = :state LIMIT 1"),
+        {"state": state}
+    ).scalar_one_or_none()
+    if not status_id:
+        raise HTTPException(status_code=500, detail=f"No '{state}' status configured in osTicket.")
+    return status_id
 
 
 @asynccontextmanager
@@ -31,7 +44,10 @@ async def lifespan(app: FastAPI):
     On shutdown, it disposes of the database connection pool.
     """
     # This code runs on startup
-    global engine
+    global engine, MAX_UPLOAD_MB, MAX_UPLOAD_BYTES
+
+    MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "10"))
+    MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
     DB_USER = os.getenv("DB_USER")
     DB_PASSWORD = os.getenv("DB_PASSWORD")
@@ -69,8 +85,7 @@ async def verify_token(x_api_key: str = Header(...), request: Request = None):
 
     Raises an HTTPException with status 401 or 403 if validation fails.
     """
-    conn = engine.connect()
-    try:
+    with engine.connect() as conn:
         query = text("SELECT `id`, `apikey`, `isactive` FROM `ost_api_key` WHERE `apikey` = :apikey")
         result = conn.execute(query, {"apikey": x_api_key}).mappings().first()
 
@@ -80,11 +95,8 @@ async def verify_token(x_api_key: str = Header(...), request: Request = None):
         if not result["isactive"]:
             raise HTTPException(status_code=403, detail="API Key is not active")
 
-    finally:
-        conn.close()
-
 app = FastAPI(
-    title="osTicket Ultimate Python API", version="0.5.0-dev", lifespan=lifespan
+    title="osTicket Ultimate Python API", version="0.6.0-dev", lifespan=lifespan
 )
 
 
@@ -93,9 +105,8 @@ app = FastAPI(
 def health_check():
     """Checks the health of the API and its database connection."""
     try:
-        conn = engine.connect()
-        conn.execute(text("SELECT 1"))
-        conn.close()
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
         return {"status": "ok", "database": "ok"}
     except Exception as e:
         raise HTTPException(status_code=503, detail={"status": "error", "database": "error", "details": str(e)})
@@ -116,25 +127,19 @@ def list_help_topics():
          response_model=List[DepartmentResponse])
 def list_departments():
     """Lists available Departments (e.g., Support, Finance)."""
-    conn = engine.connect()
-    try:
+    with engine.connect() as conn:
         query = text("SELECT id, name FROM ost_department ORDER BY name ASC")
         results = conn.execute(query).mappings().all()
         return [dict(row) for row in results]
-    finally:
-        conn.close()
 
 
 @app.get("/statuses", dependencies=[Depends(verify_token)], tags=["Listings"], response_model=List[StatusResponse])
 def list_statuses():
     """Lists ticket Statuses (e.g., Open, Closed, Resolved)."""
-    conn = engine.connect()
-    try:
+    with engine.connect() as conn:
         query = text("SELECT id, name, state FROM ost_ticket_status ORDER BY sort ASC")
         results = conn.execute(query).mappings().all()
         return [dict(row) for row in results]
-    finally:
-        conn.close()
 
 
 # --- USERS ---
@@ -156,8 +161,7 @@ def list_users(
     - **limit**: The maximum number of users to return in a single page.
     - **offset**: The number of users to skip before starting to collect the results.
     """
-    conn = engine.connect()
-    try:
+    with engine.connect() as conn:
         where_clauses = []
         params = {}
         if email:
@@ -176,13 +180,15 @@ def list_users(
         """
         total_records = conn.execute(text(count_sql), params).scalar()
 
+        params["limit"] = limit
+        params["offset"] = offset
         data_sql = f"""
             SELECT u.id, u.name, ue.address as email, u.created, u.updated
             FROM ost_user u
             JOIN ost_user_email ue ON u.id = ue.user_id
             {where_clause}
             ORDER BY u.created DESC, u.id DESC
-            LIMIT {limit} OFFSET {offset}
+            LIMIT :limit OFFSET :offset
         """
         results = conn.execute(text(data_sql), params).mappings().all()
 
@@ -203,8 +209,6 @@ def list_users(
             "previous": prev_url,
             "items": [dict(r) for r in results]
         }
-    finally:
-        conn.close()
 
 
 @app.get("/users/{user_id}", response_model=UserResponse, dependencies=[Depends(verify_token)], tags=["Users"])
@@ -214,20 +218,17 @@ def get_user(user_id: int):
 
     Provides detailed information for a specific user. Returns a 404 error if the user cannot be found.
     """
-    conn = engine.connect()
-    try:
+    with engine.connect() as conn:
         query = """
                 SELECT u.id, u.name, ue.address as email, u.created, u.updated
                 FROM ost_user u
                          JOIN ost_user_email ue ON u.id = ue.user_id
-                WHERE u.id = :user_id \
+                WHERE u.id = :user_id
                 """
         result = conn.execute(text(query), {"user_id": user_id}).mappings().first()
         if not result:
             raise HTTPException(status_code=404, detail="User not found")
         return dict(result)
-    finally:
-        conn.close()
 
 
 # --- TICKETS ---
@@ -263,8 +264,7 @@ def list_tickets(
 
     The response includes the list of tickets, pagination details, and any associated custom fields for each ticket.
     """
-    conn = engine.connect()
-    try:
+    with engine.connect() as conn:
         where_clauses = []
         params = {}
         if status_id:
@@ -289,7 +289,7 @@ def list_tickets(
         # --- Custom Fields Filtering ---
         custom_field_joins = ""
         custom_field_params = {} # type: ignore
-        known_params = {'status_id', 'topic_id', 'dept_id', 'email', 'limit', 'offset'}
+        known_params = {'status_id', 'topic_id', 'dept_id', 'email', 'updated_after', 'updated_before', 'limit', 'offset'}
 
         # Identify custom field filters from the query parameters
         custom_field_keys = [k for k in request.query_params.keys() if k not in known_params]
@@ -363,9 +363,11 @@ def list_tickets(
             {custom_field_joins}
             {where_clause}
             ORDER BY t.created DESC, t.ticket_id DESC
-            LIMIT {limit} OFFSET {offset}
+            LIMIT :limit OFFSET :offset
         """
 
+        params["limit"] = limit
+        params["offset"] = offset
         results = conn.execute(text(data_sql), params).mappings().all()
 
         # --- Fetch and Attach Custom Fields ---
@@ -426,8 +428,6 @@ def list_tickets(
             "previous": prev_url,
             "items": final_items
         }
-    finally:
-        conn.close()
 
 
 @app.get("/tickets/{ticket_id}", response_model=TicketItem, dependencies=[Depends(verify_token)], tags=["Tickets"])
@@ -508,43 +508,42 @@ def create_ticket(ticket: TicketCreate):
     based on the sequence and format configured in the osTicket admin panel.
     It requires a valid `user_id` and will raise an error if the user does not exist.
     """
-    with engine.connect() as conn:
-        with conn.begin() as trans:
-            try:
-                # --- Validate user_id ---
-                user_exists = conn.execute(text("SELECT id FROM ost_user WHERE id = :user_id"),
-                                           {"user_id": ticket.user_id}).first()
-                if not user_exists:
-                    raise HTTPException(status_code=400, detail=f"User with id {ticket.user_id} does not exist.")
+    try:
+        with engine.begin() as conn:
+            # --- Validate user_id ---
+            user_exists = conn.execute(text("SELECT id FROM ost_user WHERE id = :user_id"),
+                                       {"user_id": ticket.user_id}).first()
+            if not user_exists:
+                raise HTTPException(status_code=400, detail=f"User with id {ticket.user_id} does not exist.")
 
-                t_num = _generate_ticket_number(conn)
+            open_status_id = _get_status_id(conn, "open")
 
-                insert_topic_id = ticket.topic_id if ticket.topic_id is not None else 1
-                insert_dept_id = ticket.dept_id if ticket.dept_id is not None else 1
+            t_num = _generate_ticket_number(conn)
 
-                res = conn.execute(text("""
-                                        INSERT INTO ost_ticket (number, user_id, dept_id, topic_id, status_id, created, updated)
-                                        VALUES (:n, :user_id, :dept_id, :topic, 1, NOW(), NOW())
-                                        """), {"n": t_num, "user_id": ticket.user_id, "dept_id": insert_dept_id,
-                                               "topic": insert_topic_id})
-                tid = res.lastrowid
+            insert_topic_id = ticket.topic_id if ticket.topic_id is not None else 1
+            insert_dept_id = ticket.dept_id if ticket.dept_id is not None else 1
 
-                conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:id, 'T', NOW())"),
-                             {"id": tid})
-                thid = conn.execute(text("SELECT LAST_INSERT_ID()")).scalar()
+            res = conn.execute(text("""
+                                    INSERT INTO ost_ticket (number, user_id, dept_id, topic_id, status_id, created, updated)
+                                    VALUES (:n, :user_id, :dept_id, :topic, :status_id, NOW(), NOW())
+                                    """), {"n": t_num, "user_id": ticket.user_id, "dept_id": insert_dept_id,
+                                           "topic": insert_topic_id, "status_id": open_status_id})
+            tid = res.lastrowid
 
-                conn.execute(text("""
-                                  INSERT INTO ost_thread_entry (thread_id, type, body, poster, created, updated)
-                                  VALUES (:thid, 'M', :body, :p, NOW(), NOW())
-                                  """), {"thid": thid, "body": ticket.message, "p": "API"})
+            thread_res = conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:id, 'T', NOW())"),
+                         {"id": tid})
+            thid = thread_res.lastrowid
 
-                return {"ticket_id": tid, "number": t_num}
-            except HTTPException as e:
-                trans.rollback()
-                raise e
-            except Exception as e:
-                trans.rollback()
-                raise HTTPException(status_code=500, detail=str(e))
+            conn.execute(text("""
+                              INSERT INTO ost_thread_entry (thread_id, type, title, body, poster, created, updated)
+                              VALUES (:thid, 'M', :title, :body, :p, NOW(), NOW())
+                              """), {"thid": thid, "title": ticket.subject, "body": ticket.message, "p": "API"})
+
+            return {"ticket_id": tid, "number": t_num}
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=500, detail="An internal error occurred while creating the ticket.")
 
 
 def _generate_ticket_number(conn) -> str:
@@ -561,11 +560,9 @@ def _generate_ticket_number(conn) -> str:
     number_format = config.get('ticket_number_format', '%SEQ')
 
     # --- Get the Next Value from the Sequence ---
-    seq_name_query = text("SELECT `name` FROM `ost_sequence` WHERE `id` = :id")
-    seq_name = conn.execute(seq_name_query, {"id": sequence_id}).scalar_one_or_none() or 'ticket_number'
-
-    conn.execute(text(f"UPDATE ost_sequence SET next = LAST_INSERT_ID(next + 1) WHERE name = :seq_name"),
-                 {"seq_name": seq_name})
+    # Lock by id then update by id to avoid a name-lookup round-trip
+    conn.execute(text("SELECT id FROM ost_sequence WHERE id = :id FOR UPDATE"), {"id": sequence_id})
+    conn.execute(text("UPDATE ost_sequence SET next = LAST_INSERT_ID(next + 1) WHERE id = :id"), {"id": sequence_id})
     next_seq = conn.execute(text("SELECT LAST_INSERT_ID()")).scalar()
 
     # --- Format the Number Based on the Mask ---
@@ -600,34 +597,37 @@ async def add_attachment(ticket_id: int, file: UploadFile = File(...)):
     This endpoint uploads a file, creates the necessary records in `ost_file` and
     `ost_file_chunk`, and links the file as an attachment to the most recent message or note in the ticket's thread.
     """
-    conn = engine.connect()
-    trans = conn.begin()
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large. Maximum allowed size is {MAX_UPLOAD_MB} MB.")
+
+    f_hash = base64.b64encode(hashlib.sha256(data).digest()).decode()
+
     try:
-        data = await file.read()
-        f_hash = base64.b64encode(hashlib.sha1(data).digest()).decode()
+        with engine.begin() as conn:
+            eid = conn.execute(text(
+                "SELECT id FROM ost_thread_entry WHERE thread_id = (SELECT id FROM ost_thread WHERE object_id=:tid AND object_type='T') ORDER BY id DESC LIMIT 1"),
+                {"tid": ticket_id}).scalar()
+            if eid is None:
+                raise HTTPException(status_code=404, detail="Ticket not found or has no thread entries.")
 
-        fid = conn.execute(text("""
-                                INSERT INTO ost_file (ft, type, size, name, `key`, signature, created)
-                                VALUES ('T', :t, :s, :n, :k, :sig, NOW())
-                                """), {"t": file.content_type, "s": len(data), "n": file.filename, "k": f_hash[:32],
-                                       "sig": f_hash}).lastrowid
+            fid = conn.execute(text("""
+                                    INSERT INTO ost_file (ft, type, size, name, `key`, signature, created)
+                                    VALUES ('T', :t, :s, :n, :k, :sig, NOW())
+                                    """), {"t": file.content_type, "s": len(data), "n": file.filename,
+                                           "k": f_hash[:32], "sig": f_hash}).lastrowid
 
-        conn.execute(text("INSERT INTO ost_file_chunk (file_id, chunk_id, filedata) VALUES (:fid, 0, :d)"),
-                     {"fid": fid, "d": data})
+            conn.execute(text("INSERT INTO ost_file_chunk (file_id, chunk_id, filedata) VALUES (:fid, 0, :d)"),
+                         {"fid": fid, "d": data})
 
-        eid = conn.execute(text(
-            "SELECT id FROM ost_thread_entry WHERE thread_id = (SELECT id FROM ost_thread WHERE object_id=:tid AND object_type='T') ORDER BY id DESC LIMIT 1"),
-            {"tid": ticket_id}).scalar()
-        conn.execute(text("INSERT INTO ost_attachment (object_id, type, file_id) VALUES (:eid, 'H', :fid)"),
-                     {"eid": eid, "fid": fid})
+            conn.execute(text("INSERT INTO ost_attachment (object_id, type, file_id) VALUES (:eid, 'H', :fid)"),
+                         {"eid": eid, "fid": fid})
 
-        trans.commit()
-        return {"file_id": fid}
-    except Exception as e:
-        trans.rollback()
+            return {"file_id": fid}
+    except HTTPException:
+        raise
+    except Exception:
         raise HTTPException(status_code=500, detail="An internal error occurred while processing the attachment.")
-    finally:
-        conn.close()
 
 
 @app.put("/tickets/{ticket_id}/close", dependencies=[Depends(verify_token)], tags=["Tickets"],
@@ -639,14 +639,17 @@ def close_ticket(ticket_id: int):
     This is a convenience endpoint that sets the ticket's status to 'closed' (typically status_id 3)
     and updates its `closed` and `updated` timestamps.
     """
-    conn = engine.connect()
-    try:
-        conn.execute(text("UPDATE ost_ticket SET status_id = 3, closed = NOW(), updated = NOW() WHERE ticket_id = :id"),
-                     {"id": ticket_id})
-        conn.commit()
+    with engine.begin() as conn:
+        closed_status_id = _get_status_id(conn, "closed")
+
+        result = conn.execute(
+            text("UPDATE ost_ticket SET status_id = :status_id, closed = NOW(), updated = NOW() WHERE ticket_id = :id"),
+            {"status_id": closed_status_id, "id": ticket_id}
+        )
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Ticket not found.")
+
         return {"status": "closed"}
-    finally:
-        conn.close()
 
 
 @app.get("/", include_in_schema=False)
