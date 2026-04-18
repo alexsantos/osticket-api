@@ -28,6 +28,10 @@ To run this application, you need to configure the following environment variabl
 
 - `PORT`: The port on which the application will run. Defaults to `8080`.
 
+### Upload Limit
+
+- `MAX_UPLOAD_MB`: Maximum file size (in megabytes) accepted by the attachment endpoint. Defaults to `10`.
+
 ## API Keys
 
 This API uses the API keys configured within your osTicket installation. To create and manage API keys, log in to your osTicket admin panel and navigate to `Admin Panel > Manage > API Keys`.
@@ -64,6 +68,7 @@ docker run -d -p 8080:8080 \
   -e DB_NAME="your_db_name" \
   -e DB_PORT="3306" \
   -e PORT="8080" \
+  -e MAX_UPLOAD_MB="10" \
   --name osticket-api-container \
   osticket-api
 ```
@@ -241,7 +246,10 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
     -   **Path Parameter:**
         -   `ticket_id`: The ID of the ticket to attach the file to.
     -   **Form Data:**
-        -   `file`: The file to attach.
+        -   `file`: The file to attach. Maximum size is controlled by `MAX_UPLOAD_MB` (default 10 MB). Files exceeding the limit return `413`.
+    -   **Errors:**
+        -   `404` if the ticket does not exist.
+        -   `413` if the file exceeds the configured size limit.
     -   **Example:**
         ```bash
         curl -X POST "http://localhost:8080/tickets/123/attach" \
@@ -250,9 +258,11 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         ```
 
 -   **PUT /tickets/{ticket_id}/close**
-    -   **Description:** Closes a ticket.
+    -   **Description:** Closes a ticket by setting its status to the configured "closed" state in osTicket.
     -   **Path Parameter:**
         -   `ticket_id`: The ID of the ticket to close.
+    -   **Errors:**
+        -   `404` if the ticket does not exist.
     -   **Example:**
         ```bash
         curl -X PUT "http://localhost:8080/tickets/123/close" -H "X-API-Key: your_osTicket_api_key"
