@@ -13,13 +13,6 @@ class TicketCreate(BaseModel):
     dept_id: Optional[int] = None
 
 
-class ReplyCreate(BaseModel):
-    ticket_id: int
-    name: str
-    message: str
-    is_staff: bool = False
-
-
 # --- Response Models ---
 class HealthResponse(BaseModel):
     status: str

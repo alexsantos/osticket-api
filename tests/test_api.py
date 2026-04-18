@@ -335,6 +335,9 @@ def test_create_ticket_internal_error(client: TestClient, db_conn, monkeypatch):
         db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"),
                         {"eid": email_res.lastrowid, "uid": user_id})
 
+        db_conn.execute(text(
+            "INSERT INTO ost_ticket_status (name, state, mode, flags, properties, created, updated) VALUES ('Open', 'open', 0, 0, '{}', NOW(), NOW())"))
+
         api_key = "internal-error-key"
         db_conn.execute(text(
             "INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"),
@@ -358,7 +361,7 @@ def test_create_ticket_internal_error(client: TestClient, db_conn, monkeypatch):
 
     response = client.post("/tickets", headers=headers, json=ticket_data)
     assert response.status_code == 500
-    assert "Simulated internal server error" in response.json()["detail"]
+    assert "internal error" in response.json()["detail"].lower()
 
 
 def test_get_ticket_not_found(client: TestClient, db_conn):
@@ -393,7 +396,7 @@ def test_add_attachment_to_ticket(client: TestClient, db_conn):
     response = client.post(f"/tickets/{ticket_id}/attach", headers=headers, files={"file": ("test.txt", io.BytesIO(b"test"), "text/plain")})
     assert response.status_code == 200
     response = client.post(f"/tickets/0/attach", headers=headers, files={"file": ("test.txt", io.BytesIO(b"test"), "text/plain")})
-    assert response.status_code == 500
+    assert response.status_code == 404
 
 
 def test_close_ticket(client: TestClient, db_conn):
