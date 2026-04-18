@@ -4,12 +4,12 @@ version = "0.6.0-dev"
 description = "A new API for OSTicket"
 requires-python = ">=3.13"
 dependencies = [
-    "fastapi>=0.134.0",
+    "fastapi>=0.136.0",
     "pymysql>=1.1.2",
-    "python-multipart>=0.0.22",
-    "requests>=2.32.5",
-    "sqlalchemy>=2.0.48",
-    "uvicorn>=0.41.0",
+    "python-multipart>=0.0.26",
+    "requests>=2.33.1",
+    "sqlalchemy>=2.0.49",
+    "uvicorn>=0.44.0",
     "python-dotenv>=1.2.2",
     "httpx>=0.27.0"
 ]
