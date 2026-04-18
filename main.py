@@ -14,13 +14,14 @@ from fastapi import (Depends, FastAPI, File, Header, HTTPException, Query,
                      Request, UploadFile)
 from fastapi.responses import RedirectResponse
 from sqlalchemy import create_engine, text, event
+from sqlalchemy.engine import Engine
 
 from models import (AttachmentResponse, CloseResponse, DepartmentResponse,
                     HealthResponse, PaginatedTicketResponse, StatusResponse,
                     TicketCreate, TicketCreateResponse, TopicResponse, UserResponse, PaginatedUserResponse, TicketItem)
 from utils import make_url, CommaSeparatedInts
 
-engine: Optional[create_engine] = None
+engine: Optional[Engine] = None
 
 
 def _get_status_id(conn, state: str) -> int:

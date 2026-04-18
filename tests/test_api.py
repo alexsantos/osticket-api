@@ -259,6 +259,41 @@ def test_list_tickets_pagination(client: TestClient, db_conn):
     assert data["next"] is None
 
 
+def test_list_tickets_date_filters(client: TestClient, db_conn):
+    with db_conn.begin():
+        db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, mode, flags, properties, created, updated) VALUES (1, 'Open', 'open', 3, 0, '{}', NOW(), NOW())"))
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Date Filter User', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'datefilter@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+
+        old_time = datetime(2020, 1, 1, 12, 0, 0)
+        new_time = datetime(2024, 6, 1, 12, 0, 0)
+        db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('OLD-1', :uid, 1, :t, :t)"), {"uid": user_id, "t": old_time})
+        db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('NEW-1', :uid, 1, :t, :t)"), {"uid": user_id, "t": new_time})
+
+        api_key = "date-filter-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    headers = {"X-API-Key": api_key}
+
+    response = client.get("/tickets?updated_after=2023-01-01T00:00:00", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["items"][0]["number"] == "NEW-1"
+
+    response = client.get("/tickets?updated_before=2021-01-01T00:00:00", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["items"][0]["number"] == "OLD-1"
+
+    response = client.get("/tickets?updated_after=2019-01-01T00:00:00&updated_before=2025-01-01T00:00:00", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["total"] == 2
+
+
 def test_create_and_get_ticket(client: TestClient, db_conn):
     with db_conn.begin():
         db_conn.execute(text("INSERT INTO ost_department (id, name, signature, ispublic, created, updated) VALUES (1, 'Test Department', 'Test Signature', 1, NOW(), NOW())"))
@@ -364,6 +399,38 @@ def test_create_ticket_internal_error(client: TestClient, db_conn, monkeypatch):
     assert "internal error" in response.json()["detail"].lower()
 
 
+def test_create_ticket_no_open_status(client: TestClient, db_conn):
+    with db_conn.begin():
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'No Status User', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'nostatus@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+        api_key = "no-open-status-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    headers = {"X-API-Key": api_key}
+    response = client.post("/tickets", headers=headers, json={"user_id": user_id, "subject": "Test", "message": "Test"})
+    assert response.status_code == 500
+    assert "open" in response.json()["detail"]
+
+
+def test_close_ticket_no_closed_status(client: TestClient, db_conn):
+    with db_conn.begin():
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'No Close Status User', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'noclosestatus@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('NCS-1', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+        api_key = "no-closed-status-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    headers = {"X-API-Key": api_key}
+    response = client.put(f"/tickets/{ticket_id}/close", headers=headers)
+    assert response.status_code == 500
+    assert "closed" in response.json()["detail"]
+
+
 def test_get_ticket_not_found(client: TestClient, db_conn):
     with db_conn.begin():
         api_key = "ticket-not-found-key"
@@ -399,6 +466,53 @@ def test_add_attachment_to_ticket(client: TestClient, db_conn):
     assert response.status_code == 404
 
 
+def test_add_attachment_file_too_large(client: TestClient, db_conn, monkeypatch):
+    with db_conn.begin():
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Upload Limit User', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'uploadlimit@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('UL-1', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+
+        thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
+        thread_id = thread_res.lastrowid
+        db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": thread_id})
+
+        api_key = "upload-limit-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    import main
+    monkeypatch.setattr(main, "MAX_UPLOAD_BYTES", 10)
+    monkeypatch.setattr(main, "MAX_UPLOAD_MB", 0)
+
+    headers = {"X-API-Key": api_key}
+    oversized = io.BytesIO(b"A" * 11)
+    response = client.post(f"/tickets/{ticket_id}/attach", headers=headers, files={"file": ("big.txt", oversized, "text/plain")})
+    assert response.status_code == 413
+    assert "0 MB" in response.json()["detail"]
+
+
+def test_add_attachment_db_error(client: TestClient, db_conn, monkeypatch):
+    with db_conn.begin():
+        api_key = "attach-db-error-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    import main
+    original_begin = main.engine.begin
+
+    def mock_begin():
+        raise Exception("Simulated DB failure")
+
+    monkeypatch.setattr(main.engine, "begin", mock_begin)
+
+    headers = {"X-API-Key": api_key}
+    response = client.post("/tickets/1/attach", headers=headers, files={"file": ("test.txt", io.BytesIO(b"data"), "text/plain")})
+    assert response.status_code == 500
+    assert "attachment" in response.json()["detail"].lower()
+
+
 def test_close_ticket(client: TestClient, db_conn):
     with db_conn.begin():
         user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Close User', NOW(), NOW(), 0)"))
@@ -422,6 +536,18 @@ def test_close_ticket(client: TestClient, db_conn):
     with db_conn.begin():
         result = db_conn.execute(text("SELECT status_id FROM ost_ticket WHERE ticket_id = :tid"), {"tid": ticket_id}).scalar()
         assert result == 3
+
+
+def test_close_ticket_not_found(client: TestClient, db_conn):
+    with db_conn.begin():
+        db_conn.execute(text("INSERT INTO ost_ticket_status (name, state, mode, flags, properties, created, updated) VALUES ('Closed', 'closed', 3, 0, '{}', NOW(), NOW())"))
+        api_key = "close-not-found-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    headers = {"X-API-Key": api_key}
+    response = client.put("/tickets/99999/close", headers=headers)
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Ticket not found."
 
 
 def test_get_ticket_with_various_custom_fields(client: TestClient, db_conn: Connection):
