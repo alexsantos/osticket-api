@@ -6,9 +6,6 @@ from typing import List, Optional
 import json
 from contextlib import asynccontextmanager
 
-MAX_UPLOAD_MB: int = 10
-MAX_UPLOAD_BYTES: int = MAX_UPLOAD_MB * 1024 * 1024
-
 from dotenv import load_dotenv
 from fastapi import (Depends, FastAPI, File, Header, HTTPException, Query,
                      Request, UploadFile)
@@ -19,9 +16,18 @@ from sqlalchemy.engine import Engine
 from models import (AttachmentResponse, CloseResponse, DepartmentResponse,
                     HealthResponse, PaginatedTicketResponse, StatusResponse,
                     TicketCreate, TicketCreateResponse, TopicResponse, UserResponse, PaginatedUserResponse, TicketItem)
-from utils import make_url, CommaSeparatedInts
+from utils import build_pagination_urls, CommaSeparatedInts
+
+MAX_UPLOAD_MB: int = 10
+MAX_UPLOAD_BYTES: int = MAX_UPLOAD_MB * 1024 * 1024
 
 engine: Optional[Engine] = None
+
+
+def _get_engine() -> Engine:
+    if engine is None:
+        raise RuntimeError("Database engine is not initialized.")
+    return engine
 
 
 def _get_status_id(conn, state: str) -> int:
@@ -34,8 +40,22 @@ def _get_status_id(conn, state: str) -> int:
     return status_id
 
 
+def _parse_custom_field_value(raw_value):
+    """
+    Parses a custom field's raw stored value, unwrapping JSON-encoded choice
+    fields (e.g. dropdowns stored as {"14": "Value"}) to their user-friendly value.
+    """
+    try:
+        parsed_val = json.loads(raw_value)
+    except (json.JSONDecodeError, TypeError):
+        return raw_value
+    if isinstance(parsed_val, dict) and parsed_val:
+        return next(iter(parsed_val.values()))
+    return parsed_val
+
+
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
     """
     Manages the application's lifespan events.
 
@@ -49,22 +69,22 @@ async def lifespan(app: FastAPI):
     MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "10"))
     MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
-    DB_USER = os.getenv("DB_USER")
-    DB_PASSWORD = os.getenv("DB_PASSWORD")
-    DB_HOST = os.getenv("DB_HOST")
-    DB_NAME = os.getenv("DB_NAME")
-    DB_PORT = os.getenv("DB_PORT", "3306")
+    db_user = os.getenv("DB_USER")
+    db_password = os.getenv("DB_PASSWORD")
+    db_host = os.getenv("DB_HOST")
+    db_name = os.getenv("DB_NAME")
+    db_port = os.getenv("DB_PORT", "3306")
 
-    if not all([DB_USER, DB_PASSWORD, DB_HOST, DB_NAME]):
+    if not all([db_user, db_password, db_host, db_name]):
         raise ValueError("Database environment variables are not fully set.")
 
-    DB_URL = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}?charset=utf8mb4"
-    engine = create_engine(DB_URL, pool_pre_ping=True)
+    db_url = f"mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}?charset=utf8mb4"
+    engine = create_engine(db_url, pool_pre_ping=True)
 
     # This event listener ensures that every connection uses the correct UTF-8 encoding and collation.
     # This is crucial for correctly handling special characters like 'é' in searches.
     @event.listens_for(engine, "connect")
-    def connect(dbapi_connection, connection_record):
+    def connect(dbapi_connection, _connection_record):
         cursor = dbapi_connection.cursor()
         cursor.execute("SET NAMES 'utf8mb4' COLLATE 'utf8mb4_unicode_ci'")
         cursor.close()
@@ -75,7 +95,7 @@ async def lifespan(app: FastAPI):
 
 
 # --- SECURITY (Dependency Injection) ---
-async def verify_token(x_api_key: str = Header(...), request: Request = None):
+async def verify_token(x_api_key: str = Header(...)):
     """
     Verify an API key provided in the `X-API-Key` header.
 
@@ -85,7 +105,7 @@ async def verify_token(x_api_key: str = Header(...), request: Request = None):
 
     Raises an HTTPException with status 401 or 403 if validation fails.
     """
-    with engine.connect() as conn:
+    with _get_engine().connect() as conn:
         query = text("SELECT `id`, `apikey`, `isactive` FROM `ost_api_key` WHERE `apikey` = :apikey")
         result = conn.execute(query, {"apikey": x_api_key}).mappings().first()
 
@@ -105,11 +125,11 @@ app = FastAPI(
 def health_check():
     """Checks the health of the API and its database connection."""
     try:
-        with engine.connect() as conn:
+        with _get_engine().connect() as conn:
             conn.execute(text("SELECT 1"))
         return {"status": "ok", "database": "ok"}
     except Exception as e:
-        raise HTTPException(status_code=503, detail={"status": "error", "database": "error", "details": str(e)})
+        raise HTTPException(status_code=503, detail={"status": "error", "database": "error", "details": str(e)}) from e
 
 
 # --- AUXILIARY LISTING ENDPOINTS ---
@@ -117,7 +137,7 @@ def health_check():
 @app.get("/topics", dependencies=[Depends(verify_token)], tags=["Listings"], response_model=List[TopicResponse])
 def list_help_topics():
     """Lists active Help Topics (e.g., General Support, Sales)."""
-    with engine.connect() as conn:
+    with _get_engine().connect() as conn:
         query = text("SELECT topic_id, topic, ispublic FROM ost_help_topic WHERE isactive = 1 ORDER BY topic ASC")
         results = conn.execute(query).mappings().all()
         return [dict(row) for row in results]
@@ -127,7 +147,7 @@ def list_help_topics():
          response_model=List[DepartmentResponse])
 def list_departments():
     """Lists available Departments (e.g., Support, Finance)."""
-    with engine.connect() as conn:
+    with _get_engine().connect() as conn:
         query = text("SELECT id, name FROM ost_department ORDER BY name ASC")
         results = conn.execute(query).mappings().all()
         return [dict(row) for row in results]
@@ -136,7 +156,7 @@ def list_departments():
 @app.get("/statuses", dependencies=[Depends(verify_token)], tags=["Listings"], response_model=List[StatusResponse])
 def list_statuses():
     """Lists ticket Statuses (e.g., Open, Closed, Resolved)."""
-    with engine.connect() as conn:
+    with _get_engine().connect() as conn:
         query = text("SELECT id, name, state FROM ost_ticket_status ORDER BY sort ASC")
         results = conn.execute(query).mappings().all()
         return [dict(row) for row in results]
@@ -161,7 +181,7 @@ def list_users(
     - **limit**: The maximum number of users to return in a single page.
     - **offset**: The number of users to skip before starting to collect the results.
     """
-    with engine.connect() as conn:
+    with _get_engine().connect() as conn:
         where_clauses = []
         params = {}
         if email:
@@ -178,7 +198,7 @@ def list_users(
             JOIN ost_user_email ue ON u.id = ue.user_id
             {where_clause}
         """
-        total_records = conn.execute(text(count_sql), params).scalar()
+        total_records = conn.execute(text(count_sql), params).scalar_one()
 
         params["limit"] = limit
         params["offset"] = offset
@@ -192,14 +212,7 @@ def list_users(
         """
         results = conn.execute(text(data_sql), params).mappings().all()
 
-        next_url = None
-        if offset + limit < total_records:
-            next_url = make_url(request, limit, offset + limit)
-
-        prev_url = None
-        if offset > 0:
-            new_prev_offset = max(0, offset - limit)
-            prev_url = make_url(request, limit, new_prev_offset)
+        next_url, prev_url = build_pagination_urls(request, limit, offset, total_records)
 
         return {
             "total": total_records,
@@ -218,7 +231,7 @@ def get_user(user_id: int):
 
     Provides detailed information for a specific user. Returns a 404 error if the user cannot be found.
     """
-    with engine.connect() as conn:
+    with _get_engine().connect() as conn:
         query = """
                 SELECT u.id, u.name, ue.address as email, u.created, u.updated
                 FROM ost_user u
@@ -264,7 +277,7 @@ def list_tickets(
 
     The response includes the list of tickets, pagination details, and any associated custom fields for each ticket.
     """
-    with engine.connect() as conn:
+    with _get_engine().connect() as conn:
         where_clauses = []
         params = {}
         if status_id:
@@ -288,7 +301,7 @@ def list_tickets(
 
         # --- Custom Fields Filtering ---
         custom_field_joins = ""
-        custom_field_params = {} # type: ignore
+        custom_field_params = {}
         known_params = {'status_id', 'topic_id', 'dept_id', 'email', 'updated_after', 'updated_before', 'limit', 'offset'}
 
         # Identify custom field filters from the query parameters
@@ -348,7 +361,7 @@ def list_tickets(
             {where_clause}
         """
 
-        total_records = conn.execute(text(count_sql), params).scalar()
+        total_records = conn.execute(text(count_sql), params).scalar_one()
 
         data_sql = f"""
             SELECT t.ticket_id, t.number, t.created, t.status_id, s.name as status_name, 
@@ -395,30 +408,13 @@ def list_tickets(
             # Organize custom fields by ticket_id
             custom_fields_map = {tid: {} for tid in ticket_ids}
             for cf in custom_fields_results:
-                # For JSON-encoded fields, try to extract the user-friendly value
-                try:
-                    parsed_val = json.loads(cf['value'])
-                    # If it's a dictionary (like a dropdown choice), extract the value.
-                    # Otherwise (if it's a number, string, etc.), use the parsed value directly.
-                    if isinstance(parsed_val, dict) and parsed_val:
-                        custom_fields_map[cf['ticket_id']][cf['name']] = next(iter(parsed_val.values()))
-                    else:
-                        custom_fields_map[cf['ticket_id']][cf['name']] = parsed_val
-                except (json.JSONDecodeError, StopIteration, TypeError):
-                    custom_fields_map[cf['ticket_id']][cf['name']] = cf['value']
+                custom_fields_map[cf['ticket_id']][cf['name']] = _parse_custom_field_value(cf['value'])
 
             # Attach the custom fields to the corresponding ticket items
             for item in final_items:
                 item['custom_fields'] = custom_fields_map.get(item['ticket_id'], {})
 
-        next_url = None
-        if offset + limit < total_records:
-            next_url = make_url(request, limit, offset + limit)
-
-        prev_url = None
-        if offset > 0:
-            new_prev_offset = max(0, offset - limit)
-            prev_url = make_url(request, limit, new_prev_offset)
+        next_url, prev_url = build_pagination_urls(request, limit, offset, total_records)
 
         return {
             "total": total_records,
@@ -438,7 +434,7 @@ def get_ticket(ticket_id: int):
     Provides detailed information for a specific ticket, including its status, topic,
     department, owner, and all associated custom field data. Returns a 404 error if the ticket cannot be found.
     """
-    with engine.connect() as conn:
+    with _get_engine().connect() as conn:
         query = """
                 SELECT t.ticket_id,
                        t.number,
@@ -486,14 +482,7 @@ def get_ticket(ticket_id: int):
 
         custom_fields_map = {}
         for cf in custom_fields_results:
-            try:
-                parsed_val = json.loads(cf['value'])
-                if isinstance(parsed_val, dict) and parsed_val:
-                    custom_fields_map[cf['name']] = next(iter(parsed_val.values()))
-                else:
-                    custom_fields_map[cf['name']] = parsed_val
-            except (json.JSONDecodeError, StopIteration, TypeError):
-                custom_fields_map[cf['name']] = cf['value']
+            custom_fields_map[cf['name']] = _parse_custom_field_value(cf['value'])
 
         final_item['custom_fields'] = custom_fields_map
         return final_item
@@ -509,7 +498,7 @@ def create_ticket(ticket: TicketCreate):
     It requires a valid `user_id` and will raise an error if the user does not exist.
     """
     try:
-        with engine.begin() as conn:
+        with _get_engine().begin() as conn:
             # --- Validate user_id ---
             user_exists = conn.execute(text("SELECT id FROM ost_user WHERE id = :user_id"),
                                        {"user_id": ticket.user_id}).first()
@@ -542,8 +531,8 @@ def create_ticket(ticket: TicketCreate):
             return {"ticket_id": tid, "number": t_num}
     except HTTPException:
         raise
-    except Exception:
-        raise HTTPException(status_code=500, detail="An internal error occurred while creating the ticket.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="An internal error occurred while creating the ticket.") from e
 
 
 def _generate_ticket_number(conn) -> str:
@@ -604,7 +593,7 @@ async def add_attachment(ticket_id: int, file: UploadFile = File(...)):
     f_hash = base64.b64encode(hashlib.sha256(data).digest()).decode()
 
     try:
-        with engine.begin() as conn:
+        with _get_engine().begin() as conn:
             eid = conn.execute(text(
                 "SELECT id FROM ost_thread_entry WHERE thread_id = (SELECT id FROM ost_thread WHERE object_id=:tid AND object_type='T') ORDER BY id DESC LIMIT 1"),
                 {"tid": ticket_id}).scalar()
@@ -626,8 +615,8 @@ async def add_attachment(ticket_id: int, file: UploadFile = File(...)):
             return {"file_id": fid}
     except HTTPException:
         raise
-    except Exception:
-        raise HTTPException(status_code=500, detail="An internal error occurred while processing the attachment.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="An internal error occurred while processing the attachment.") from e
 
 
 @app.put("/tickets/{ticket_id}/close", dependencies=[Depends(verify_token)], tags=["Tickets"],
@@ -639,7 +628,7 @@ def close_ticket(ticket_id: int):
     This is a convenience endpoint that sets the ticket's status to 'closed' (typically status_id 3)
     and updates its `closed` and `updated` timestamps.
     """
-    with engine.begin() as conn:
+    with _get_engine().begin() as conn:
         closed_status_id = _get_status_id(conn, "closed")
 
         result = conn.execute(

@@ -13,6 +13,19 @@ def make_url(request: Request, limit: int, offset: int) -> str:
     return f"{base_url}?{urlencode(query_params)}"
 
 
+def build_pagination_urls(request: Request, limit: int, offset: int, total: int) -> tuple[Optional[str], Optional[str]]:
+    """Builds the 'next' and 'previous' pagination URLs for a paginated response."""
+    next_url = None
+    if offset + limit < total:
+        next_url = make_url(request, limit, offset + limit)
+
+    previous_url = None
+    if offset > 0:
+        previous_url = make_url(request, limit, max(0, offset - limit))
+
+    return next_url, previous_url
+
+
 def CommaSeparatedInts(param_name: str) -> Callable[..., Optional[List[int]]]:
     """
     A dependency that parses a comma-separated list of integers from a query parameter.
