@@ -1,0 +1,36 @@
+name: Version Check
+
+on:
+  push:
+    branches:
+      - "release/**"
+      - "hotfix/**"
+  pull_request:
+    branches: [ "main", "develop" ]
+
+permissions:
+  contents: read
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    if: startsWith(github.head_ref || github.ref_name, 'release/') || startsWith(github.head_ref || github.ref_name, 'hotfix/')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Compare branch name to pyproject.toml version
+        run: |
+          BRANCH="${{ github.head_ref || github.ref_name }}"
+          EXPECTED_VERSION="${BRANCH#*/}"
+          ACTUAL_VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+
+          echo "Branch: $BRANCH"
+          echo "Expected version (from branch name): $EXPECTED_VERSION"
+          echo "Actual version (from pyproject.toml): $ACTUAL_VERSION"
+
+          if [ "$EXPECTED_VERSION" != "$ACTUAL_VERSION" ]; then
+            echo "::error::Version mismatch: branch '$BRANCH' implies version '$EXPECTED_VERSION', but pyproject.toml has '$ACTUAL_VERSION'."
+            exit 1
+          fi
