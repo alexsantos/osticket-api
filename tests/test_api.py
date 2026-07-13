@@ -431,6 +431,17 @@ def test_close_ticket_no_closed_status(client: TestClient, db_conn):
     assert "closed" in response.json()["detail"]
 
 
+def test_list_tickets_invalid_status_id(client: TestClient, db_conn):
+    with db_conn.begin():
+        api_key = "ticket-invalid-status-id-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    headers = {"X-API-Key": api_key}
+    response = client.get("/tickets?status_id=1,abc", headers=headers)
+    assert response.status_code == 422
+    assert "status_id" in response.json()["detail"]
+
+
 def test_get_ticket_not_found(client: TestClient, db_conn):
     with db_conn.begin():
         api_key = "ticket-not-found-key"
