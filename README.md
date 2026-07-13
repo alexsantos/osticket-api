@@ -56,6 +56,16 @@ This project is designed to be run in a Docker container.
     docker build -t osticket-api .
     ```
 
+### Using a Pre-Built Image
+
+Every published GitHub release is also built and pushed to the GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/alexsantos/osticket-api:latest
+# or a specific version
+docker pull ghcr.io/alexsantos/osticket-api:0.7.0
+```
+
 ### Running the Container
 
 You can run the container by passing the environment variables directly on the command line.
