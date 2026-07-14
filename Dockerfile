@@ -7,6 +7,13 @@ WORKDIR /app
 # Install uv, our package manager
 RUN pip install uv
 
+# Build dependencies for mysqlclient (a C extension linking against the MySQL client library)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config \
+    default-libmysqlclient-dev \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy dependency definitions
 COPY pyproject.toml uv.lock* ./
 

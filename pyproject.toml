@@ -1,11 +1,11 @@
 [project]
 name = "osticket-api"
-version = "0.8.0-dev"
+version = "0.8.0"
 description = "A new API for OSTicket"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.139.0",
-    "pymysql>=1.2.0",
+    "mysqlclient>=2.2.4",
     "python-multipart>=0.0.32",
     "requests>=2.34.2",
     "sqlalchemy>=2.0.51",

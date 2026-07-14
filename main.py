@@ -79,7 +79,7 @@ async def lifespan(_app: FastAPI):
         raise ValueError("Database environment variables are not fully set.")
 
     db_url = URL.create(
-        drivername="mysql+pymysql",
+        drivername="mysql+mysqldb",
         username=db_user,
         password=db_password,
         host=db_host,
