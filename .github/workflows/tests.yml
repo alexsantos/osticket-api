@@ -17,6 +17,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install mysqlclient build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config default-libmysqlclient-dev build-essential
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -43,7 +46,7 @@ jobs:
         env:
           DB_USER: testuser
           DB_PASSWORD: testpassword
-          DB_HOST: localhost
+          DB_HOST: 127.0.0.1
           DB_NAME: osticket_test
         run: |
           uv run pytest --cov=. --cov-report=xml --cov-report=term-missing
