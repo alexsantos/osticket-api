@@ -34,7 +34,7 @@ def test_db_password_with_special_characters(monkeypatch):
     special_password = "p@ss#word/with:special%chars"
     monkeypatch.setenv("DB_USER", "testuser")
     monkeypatch.setenv("DB_PASSWORD", special_password)
-    monkeypatch.setenv("DB_HOST", "localhost")
+    monkeypatch.setenv("DB_HOST", "127.0.0.1")
     monkeypatch.setenv("DB_NAME", "testdb")
     monkeypatch.setenv("DB_PORT", "3306")
 
@@ -43,3 +43,44 @@ def test_db_password_with_special_characters(monkeypatch):
 
     with TestClient(app):
         assert main_module.engine.url.password == special_password
+
+
+def test_non_ascii_password_authenticates(monkeypatch):
+    """
+    End-to-end regression test: a DB_PASSWORD containing a non-ASCII
+    character (e.g. '£') must actually authenticate against MySQL/MariaDB.
+
+    PyMySQL hardcodes the auth handshake password to Latin-1, which mismatches
+    non-ASCII passwords set via UTF-8-based tools (e.g. DBeaver's JDBC driver),
+    causing a 1045 Access Denied even with the exact correct password. This is
+    why the driver was switched to mysqlclient, which performs the real MySQL
+    client handshake and negotiates UTF-8-based collations like DBeaver does.
+    """
+    from sqlalchemy import create_engine, text
+
+    special_password = "Str0ng£Pass!"
+    username = "special_char_user"
+
+    admin_engine = create_engine("mysql+mysqldb://root:testpassword@127.0.0.1:3306/osticket_test")
+    with admin_engine.begin() as conn:
+        conn.execute(text(f"DROP USER IF EXISTS '{username}'@'%'"))
+        conn.execute(text(f"CREATE USER '{username}'@'%' IDENTIFIED BY :password"), {"password": special_password})
+        conn.execute(text(f"GRANT SELECT ON osticket_test.* TO '{username}'@'%'"))
+
+    try:
+        monkeypatch.setenv("DB_USER", username)
+        monkeypatch.setenv("DB_PASSWORD", special_password)
+        monkeypatch.setenv("DB_HOST", "127.0.0.1")
+        monkeypatch.setenv("DB_NAME", "osticket_test")
+        monkeypatch.setenv("DB_PORT", "3306")
+
+        from main import app
+
+        with TestClient(app) as c:
+            response = c.get("/health")
+            assert response.status_code == 200
+            assert response.json() == {"status": "ok", "database": "ok"}
+    finally:
+        with admin_engine.begin() as conn:
+            conn.execute(text(f"DROP USER IF EXISTS '{username}'@'%'"))
+        admin_engine.dispose()
