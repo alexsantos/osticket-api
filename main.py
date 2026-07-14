@@ -11,7 +11,7 @@ from fastapi import (Depends, FastAPI, File, Header, HTTPException, Query,
                      Request, UploadFile)
 from fastapi.responses import RedirectResponse
 from sqlalchemy import create_engine, text, event
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, URL
 
 from models import (AttachmentResponse, CloseResponse, DepartmentResponse,
                     HealthResponse, PaginatedTicketResponse, StatusResponse,
@@ -78,7 +78,15 @@ async def lifespan(_app: FastAPI):
     if not all([db_user, db_password, db_host, db_name]):
         raise ValueError("Database environment variables are not fully set.")
 
-    db_url = f"mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}?charset=utf8mb4"
+    db_url = URL.create(
+        drivername="mysql+pymysql",
+        username=db_user,
+        password=db_password,
+        host=db_host,
+        port=int(db_port),
+        database=db_name,
+        query={"charset": "utf8mb4"},
+    )
     engine = create_engine(db_url, pool_pre_ping=True)
 
     # This event listener ensures that every connection uses the correct UTF-8 encoding and collation.

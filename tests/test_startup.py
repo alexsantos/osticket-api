@@ -22,3 +22,24 @@ def test_missing_db_env_vars(monkeypatch):
     
     # Assert that the error message is what we expect
     assert "Database environment variables are not fully set." in str(excinfo.value)
+
+
+def test_db_password_with_special_characters(monkeypatch):
+    """
+    Tests that a DB_PASSWORD containing URL-reserved characters (e.g. '#', '@',
+    ':', '/', '%') is preserved intact in the connection URL, instead of being
+    truncated or misparsed as happens when such a URL is built via raw string
+    interpolation (e.g. '#' starts a URL fragment, silently dropping the rest).
+    """
+    special_password = "p@ss#word/with:special%chars"
+    monkeypatch.setenv("DB_USER", "testuser")
+    monkeypatch.setenv("DB_PASSWORD", special_password)
+    monkeypatch.setenv("DB_HOST", "localhost")
+    monkeypatch.setenv("DB_NAME", "testdb")
+    monkeypatch.setenv("DB_PORT", "3306")
+
+    import main as main_module
+    from main import app
+
+    with TestClient(app):
+        assert main_module.engine.url.password == special_password
