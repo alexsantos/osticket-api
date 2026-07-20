@@ -44,7 +44,7 @@ This project is designed to be run in a Docker container.
 
 ### Prerequisites
 
-- Docker installed and running.
+Docker installed and running.
 
 ### Building the Image
 
