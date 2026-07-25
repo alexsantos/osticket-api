@@ -13,6 +13,12 @@ class TicketCreate(BaseModel):
     dept_id: Optional[int] = None
 
 
+class NoteCreate(BaseModel):
+    body: str
+    title: Optional[str] = None
+    poster: Optional[str] = "API"
+
+
 # --- Response Models ---
 class HealthResponse(BaseModel):
     status: str
@@ -85,6 +91,10 @@ class TicketCreateResponse(BaseModel):
 
 class AttachmentResponse(BaseModel):
     file_id: int
+
+
+class NoteResponse(BaseModel):
+    entry_id: int
 
 
 class CloseResponse(BaseModel):
