@@ -83,5 +83,6 @@ All application code lives in three files:
 | `DB_PORT` | No | `3306` |
 | `PORT` | No | `8080` |
 | `MAX_UPLOAD_MB` | No | `10` |
+| `ROOT_PATH` | No | `` (empty) |
 
 Copy `.env.example` to `.env` for local development. Tests use `.env.test`.

@@ -650,8 +650,8 @@ def close_ticket(ticket_id: int):
 
 
 @app.get("/", include_in_schema=False)
-async def redirect_to_docs():  # pragma: no cover
-    return RedirectResponse(url="/redoc")
+async def redirect_to_docs(request: Request):  # pragma: no cover
+    return RedirectResponse(url=f"{request.scope.get('root_path', '')}/redoc")
 
 
 if __name__ == "__main__":  # pragma: no cover
@@ -660,4 +660,5 @@ if __name__ == "__main__":  # pragma: no cover
     # Load .env file for direct script execution
     load_dotenv()
     port = int(os.environ.get("PORT", 8080))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    root_path = os.environ.get("ROOT_PATH", "")
+    uvicorn.run(app, host="0.0.0.0", port=port, root_path=root_path)
