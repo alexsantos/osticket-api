@@ -524,6 +524,89 @@ def test_add_attachment_db_error(client: TestClient, db_conn, monkeypatch):
     assert "attachment" in response.json()["detail"].lower()
 
 
+def test_add_note_to_ticket(client: TestClient, db_conn):
+    with db_conn.begin():
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Note User', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'note@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('NOTE-1', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+
+        db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
+
+        api_key = "note-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    headers = {"X-API-Key": api_key}
+    note_data = {"body": "Forwarded to Ops as ticket #456.", "poster": "Ticket-Sync"}
+    response = client.post(f"/tickets/{ticket_id}/note", headers=headers, json=note_data)
+    assert response.status_code == 200
+    entry_id = response.json()["entry_id"]
+    assert entry_id > 0
+
+    with db_conn.begin():
+        row = db_conn.execute(text("SELECT type, body, poster, title FROM ost_thread_entry WHERE id = :id"), {"id": entry_id}).mappings().first()
+    assert row["type"] == "N"
+    assert row["body"] == "Forwarded to Ops as ticket #456."
+    assert row["poster"] == "Ticket-Sync"
+    assert row["title"] == ""
+
+
+def test_add_note_default_poster(client: TestClient, db_conn):
+    with db_conn.begin():
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Note User 2', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'note2@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('NOTE-2', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+
+        db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
+
+        api_key = "note-default-poster-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    headers = {"X-API-Key": api_key}
+    response = client.post(f"/tickets/{ticket_id}/note", headers=headers, json={"body": "No poster given."})
+    assert response.status_code == 200
+
+    with db_conn.begin():
+        row = db_conn.execute(text("SELECT poster FROM ost_thread_entry WHERE id = :id"), {"id": response.json()["entry_id"]}).mappings().first()
+    assert row["poster"] == "API"
+
+
+def test_add_note_ticket_not_found(client: TestClient, db_conn):
+    with db_conn.begin():
+        api_key = "note-not-found-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    headers = {"X-API-Key": api_key}
+    response = client.post("/tickets/99999/note", headers=headers, json={"body": "Should not be created."})
+    assert response.status_code == 404
+
+
+def test_add_note_db_error(client: TestClient, db_conn, monkeypatch):
+    with db_conn.begin():
+        api_key = "note-db-error-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    import main
+    original_begin = main.engine.begin
+
+    def mock_begin():
+        raise Exception("Simulated DB failure")
+
+    monkeypatch.setattr(main.engine, "begin", mock_begin)
+
+    headers = {"X-API-Key": api_key}
+    response = client.post("/tickets/1/note", headers=headers, json={"body": "Test"})
+    assert response.status_code == 500
+    assert "note" in response.json()["detail"].lower()
+
+
 def test_close_ticket(client: TestClient, db_conn):
     with db_conn.begin():
         user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Close User', NOW(), NOW(), 0)"))

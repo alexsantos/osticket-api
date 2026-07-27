@@ -267,6 +267,27 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -F "file=@/path/to/your/file.txt"
         ```
 
+-   **POST /tickets/{ticket_id}/note**
+    -   **Description:** Adds an internal (staff-only) note to a ticket's thread. Notes are never visible to the ticket's owner and generate no outbound email — useful for integrations to leave an audit trail.
+    -   **Path Parameter:**
+        -   `ticket_id`: The ID of the ticket to add the note to.
+    -   **Request Body:**
+        -   `body` (required): The note's content.
+        -   `title` (optional): A short title for the note.
+        -   `poster` (optional, default: `"API"`): The display name attributed as the note's author.
+    -   **Errors:**
+        -   `404` if the ticket does not exist.
+    -   **Example:**
+        ```bash
+        curl -X POST "http://localhost:8080/tickets/123/note" \
+        -H "Content-Type: application/json" \
+        -H "X-API-Key: your_osTicket_api_key" \
+        -d '{
+          "body": "Forwarded to Ops as ticket #456.",
+          "poster": "Ticket-Sync"
+        }'
+        ```
+
 -   **PUT /tickets/{ticket_id}/close**
     -   **Description:** Closes a ticket by setting its status to the configured "closed" state in osTicket.
     -   **Path Parameter:**
