@@ -72,6 +72,9 @@ class TicketItem(BaseModel):
     user_id: int
     user_name: str
     user_email: str
+    subject: Optional[str] = None
+    message: Optional[str] = None
+    closed: Optional[datetime] = None
     custom_fields: Optional[dict] = None
 
 
