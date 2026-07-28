@@ -456,13 +456,20 @@ def get_ticket(ticket_id: int):
                        d.name     as dept_name,
                        t.user_id,
                        u.name     as user_name,
-                       ue.address as user_email
+                       ue.address as user_email,
+                       t.closed,
+                       te.title   as subject,
+                       te.body    as message
                 FROM ost_ticket t
                          JOIN ost_ticket_status s ON t.status_id = s.id
                          JOIN ost_user u ON t.user_id = u.id
                          JOIN ost_user_email ue ON u.id = ue.user_id
                          LEFT JOIN ost_help_topic ht ON t.topic_id = ht.topic_id
                          LEFT JOIN ost_department d ON t.dept_id = d.id
+                         LEFT JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
+                         LEFT JOIN ost_thread_entry te ON te.id = (
+                             SELECT MIN(id) FROM ost_thread_entry WHERE thread_id = th.id
+                         )
                 WHERE t.ticket_id = :ticket_id \
                 """
         result = conn.execute(text(query), {"ticket_id": ticket_id}).mappings().first()
