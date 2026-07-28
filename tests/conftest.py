@@ -27,9 +27,15 @@ def db_conn(db_engine):
     yield connection  # The test runs here, using this connection
 
     # --- Teardown: Clean the database after each test is complete ---
-    # This runs after the test function has finished
-    transaction = connection.begin()
+    # This runs after the test function has finished.
+    # `transaction` starts as None and `begin()` runs inside the try so
+    # that a connection left mid-transaction by the test (e.g. a bare
+    # execute() after `with db_conn.begin():`) still gets closed in
+    # `finally` instead of leaking a checked-out, lock-holding connection
+    # until MySQL's wait_timeout kills it hours later.
+    transaction = None
     try:
+        transaction = connection.begin()
         tables = connection.execute(text("SHOW TABLES;")).fetchall()
         table_names = [table[0] for table in tables]
         connection.execute(text("SET FOREIGN_KEY_CHECKS = 0;"))
@@ -38,7 +44,8 @@ def db_conn(db_engine):
         connection.execute(text("SET FOREIGN_KEY_CHECKS = 1;"))
         transaction.commit()
     except Exception:
-        transaction.rollback()
+        if transaction is not None:
+            transaction.rollback()
         raise
     finally:
         connection.close()

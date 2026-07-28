@@ -14,7 +14,7 @@ from sqlalchemy import create_engine, text, event
 from sqlalchemy.engine import Engine, URL
 
 from models import (AttachmentResponse, CloseResponse, DepartmentResponse,
-                    HealthResponse, PaginatedTicketResponse, StatusResponse,
+                    HealthResponse, NoteCreate, NoteResponse, PaginatedTicketResponse, StatusResponse,
                     TicketCreate, TicketCreateResponse, TopicResponse, UserResponse, PaginatedUserResponse, TicketItem)
 from utils import build_pagination_urls, CommaSeparatedInts
 
@@ -625,6 +625,38 @@ async def add_attachment(ticket_id: int, file: UploadFile = File(...)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="An internal error occurred while processing the attachment.") from e
+
+
+@app.post("/tickets/{ticket_id}/note", dependencies=[Depends(verify_token)], tags=["Tickets"],
+          response_model=NoteResponse)
+def add_note(ticket_id: int, note: NoteCreate):
+    """
+    Add an internal note to a ticket's thread.
+
+    Notes are staff-only: unlike a message/response, they are never visible
+    to the ticket's owner and generate no outbound email. Useful for
+    integrations to leave an audit trail (e.g. "Forwarded to Ops as #123")
+    without notifying the requester. Returns 404 if the ticket does not exist.
+    """
+    try:
+        with _get_engine().begin() as conn:
+            thread_id = conn.execute(
+                text("SELECT id FROM ost_thread WHERE object_id = :tid AND object_type = 'T'"),
+                {"tid": ticket_id}).scalar()
+            if thread_id is None:
+                raise HTTPException(status_code=404, detail="Ticket not found.")
+
+            res = conn.execute(text("""
+                                    INSERT INTO ost_thread_entry (thread_id, type, title, body, poster, source, created, updated)
+                                    VALUES (:thid, 'N', :title, :body, :poster, 'API', NOW(), NOW())
+                                    """), {"thid": thread_id, "title": note.title or "", "body": note.body,
+                                           "poster": note.poster or "API"})
+
+            return {"entry_id": res.lastrowid}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="An internal error occurred while adding the note.") from e
 
 
 @app.put("/tickets/{ticket_id}/close", dependencies=[Depends(verify_token)], tags=["Tickets"],
