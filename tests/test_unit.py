@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import Mock
 from utils import make_url
+from main import _server_supports_json_functions
 
 def test_make_url():
     """
@@ -28,3 +29,31 @@ def test_make_url():
     mock_request.query_params = {"limit": "50", "offset": "0"}
     next_url_no_params = make_url(request=mock_request, limit=50, offset=50)
     assert next_url_no_params == "http://testserver/users?limit=50&offset=50"
+
+
+@pytest.mark.parametrize("version_string, expected", [
+    # Real-world report: old MariaDB, no JSON functions.
+    ("5.5.68-MariaDB", False),
+    # Real-world report: MariaDB's "5.5.5-" compatibility-prefixed string,
+    # where the real version (10.11.5) does support JSON functions.
+    ("5.5.5-10.11.5-MariaDB", True),
+    # MariaDB right at the 10.2 boundary.
+    ("10.2.0-MariaDB", True),
+    ("10.1.48-MariaDB", False),
+    # Debian/Ubuntu package builds append extra suffixes after "-MariaDB".
+    ("10.6.12-MariaDB-0ubuntu0.22.04.1", True),
+    # Plain MySQL, with and without a "-log" style suffix.
+    ("8.0.34", True),
+    ("5.7.8-log", True),
+    ("5.6.51-log", False),
+    # Unrecognized format: assume a modern server rather than degrading filters.
+    ("not-a-version", True),
+])
+def test_server_supports_json_functions(version_string, expected):
+    """
+    Unit tests for the version-string parsing that decides whether the
+    connected server supports JSON_EXTRACT/JSON_UNQUOTE (MariaDB >= 10.2,
+    MySQL >= 5.7.8), including MariaDB's quirky compatibility-prefixed
+    "5.5.5-10.11.5-MariaDB" version string format.
+    """
+    assert _server_supports_json_functions(version_string) is expected

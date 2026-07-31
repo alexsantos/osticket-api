@@ -825,6 +825,41 @@ def test_list_tickets_with_custom_field_filters(client: TestClient, db_conn: Con
     assert response.json()["total"] == 0
 
 
+def test_list_tickets_custom_field_filter_without_json_functions(client: TestClient, db_conn: Connection, monkeypatch):
+    """
+    Regression test for servers without JSON_EXTRACT/JSON_UNQUOTE (e.g. MariaDB
+    < 10.2, as reported against a MariaDB 5.5.68 instance). Forces the
+    "unsupported" fallback path and checks custom field filtering still works.
+    """
+    import main as main_module
+    monkeypatch.setattr(main_module, "_supports_json_functions", False)
+
+    with db_conn.begin():
+        api_key = "no-json-functions-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+        db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, properties, created, updated) VALUES (1, 'Open', 'open', '{}', NOW(), NOW())"))
+
+        form_res = db_conn.execute(text("INSERT INTO ost_form (title, created, updated) VALUES ('Search Form', NOW(), NOW())"))
+        form_id = form_res.lastrowid
+        field_res = db_conn.execute(text("INSERT INTO ost_form_field (form_id, label, name, type, sort, created, updated) VALUES (:fid, 'Order ID', 'order_id', 'text', 1, NOW(), NOW())"), {"fid": form_id})
+        field_id = field_res.lastrowid
+
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, default_email_id, name, created, updated) VALUES (0, 0, 'User A', NOW(), NOW())"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'user_a@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('T-NOJSON', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+        entry_res = db_conn.execute(text("INSERT INTO ost_form_entry (form_id, object_id, object_type, created, updated) VALUES (:fid, :tid, 'T', NOW(), NOW())"), {"fid": form_id, "tid": ticket_id})
+        db_conn.execute(text("INSERT INTO ost_form_entry_values (entry_id, field_id, value) VALUES (:eid, :fid, 'ORDER-A')"), {"eid": entry_res.lastrowid, "fid": field_id})
+
+    headers = {"X-API-Key": api_key}
+    response = client.get("/tickets?order_id=ORDER-A", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert response.json()["items"][0]["number"] == "T-NOJSON"
+
+
 def test_list_tickets_with_json_number_custom_field(client: TestClient, db_conn: Connection):
     """
     Tests that the list_tickets endpoint correctly parses a custom field

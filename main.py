@@ -22,12 +22,42 @@ MAX_UPLOAD_MB: int = 10
 MAX_UPLOAD_BYTES: int = MAX_UPLOAD_MB * 1024 * 1024
 
 engine: Optional[Engine] = None
+_supports_json_functions: Optional[bool] = None
 
 
 def _get_engine() -> Engine:
     if engine is None:
         raise RuntimeError("Database engine is not initialized.")
     return engine
+
+
+def _server_supports_json_functions(version_string: str) -> bool:
+    """
+    Whether the connected server supports JSON_EXTRACT/JSON_UNQUOTE, used to
+    unwrap JSON-encoded custom field values when filtering GET /tickets.
+
+    MariaDB added these functions in 10.2; MySQL in 5.7.8. Older MariaDB
+    builds report a "5.5.5-10.11.5-MariaDB..." compatibility-prefixed
+    version string, where the real version follows the "5.5.5-" prefix.
+    """
+    is_mariadb = "MariaDB" in version_string
+    version_part = version_string.split("-MariaDB")[0] if is_mariadb else version_string.split("-")[0]
+    if is_mariadb and version_part.startswith("5.5.5-"):
+        version_part = version_part[len("5.5.5-"):]
+    try:
+        numeric_version = tuple(int(p) for p in version_part.split(".")[:3])
+    except ValueError:
+        return True  # Unrecognized format — assume a modern server rather than degrading filters.
+    return numeric_version >= ((10, 2) if is_mariadb else (5, 7, 8))
+
+
+def _json_functions_supported(conn) -> bool:
+    """Lazily detects and caches JSON function support for the connected server."""
+    global _supports_json_functions
+    if _supports_json_functions is None:
+        server_version = conn.execute(text("SELECT VERSION()")).scalar_one()
+        _supports_json_functions = _server_supports_json_functions(server_version)
+    return _supports_json_functions
 
 
 def _get_status_id(conn, state: str) -> int:
@@ -314,6 +344,7 @@ def list_tickets(
 
         # Identify custom field filters from the query parameters
         custom_field_keys = [k for k in request.query_params.keys() if k not in known_params]
+        supports_json = _json_functions_supported(conn) if custom_field_keys else True
 
         # Dynamically build joins and where clauses for each custom field
         for i, field_name in enumerate(custom_field_keys):
@@ -336,11 +367,16 @@ def list_tickets(
             like_conditions = []
             for j, value in enumerate(flat_values):
                 param_name_val = f"cf_val_{i}_{j}"
-                # This condition intelligently handles both plain text and JSON-encoded choice fields.
-                # 1. It tries to extract the value from a JSON object (e.g., {"14":"Médis"}) and unescapes it.
-                # 2. If the field is not a JSON object, the COALESCE falls back to the raw value.
-                # 3. This ensures a clean, direct comparison against the user's search term.
-                like_conditions.append(f"COALESCE(JSON_UNQUOTE(JSON_EXTRACT(JSON_EXTRACT({join_alias_fev}.value, '$.*'), '$[0]')), {join_alias_fev}.value) LIKE :{param_name_val}")
+                if supports_json:
+                    # This condition intelligently handles both plain text and JSON-encoded choice fields.
+                    # 1. It tries to extract the value from a JSON object (e.g., {"14":"Médis"}) and unescapes it.
+                    # 2. If the field is not a JSON object, the COALESCE falls back to the raw value.
+                    # 3. This ensures a clean, direct comparison against the user's search term.
+                    like_conditions.append(f"COALESCE(JSON_UNQUOTE(JSON_EXTRACT(JSON_EXTRACT({join_alias_fev}.value, '$.*'), '$[0]')), {join_alias_fev}.value) LIKE :{param_name_val}")
+                else:
+                    # Older servers (MariaDB < 10.2, MySQL < 5.7.8) lack JSON_EXTRACT/JSON_UNQUOTE.
+                    # Fall back to matching the raw stored value directly.
+                    like_conditions.append(f"{join_alias_fev}.value LIKE :{param_name_val}")
                 custom_field_params[param_name_val] = f"%{value}%"
 
             # Combine the LIKE conditions with OR
