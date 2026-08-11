@@ -15,7 +15,9 @@ from sqlalchemy.engine import Engine, URL
 
 from models import (AttachmentResponse, CloseResponse, DepartmentResponse,
                     HealthResponse, NoteCreate, NoteResponse, PaginatedTicketResponse, StatusResponse,
-                    TicketCreate, TicketCreateResponse, TopicResponse, UserResponse, PaginatedUserResponse, TicketItem)
+                    TicketCreate, TicketCreateResponse, TopicResponse, UserResponse, PaginatedUserResponse, TicketItem,
+                    StatusUpdateRequest, DepartmentUpdateRequest, TeamUpdateRequest, MessageUpdateRequest,
+                    UpdateResponse)
 from utils import build_pagination_urls, CommaSeparatedInts
 
 MAX_UPLOAD_MB: int = 10
@@ -700,6 +702,150 @@ def add_note(ticket_id: int, note: NoteCreate):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="An internal error occurred while adding the note.") from e
+
+
+@app.put("/tickets/{ticket_id}/status", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=UpdateResponse)
+def update_ticket_status(ticket_id: int, payload: StatusUpdateRequest):
+    """Update a ticket's status."""
+    with _get_engine().begin() as conn:
+        result = conn.execute(
+            text("UPDATE ost_ticket SET status_id = :status_id, updated = NOW() WHERE ticket_id = :id"),
+            {"status_id": payload.status_id, "id": ticket_id}
+        )
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Ticket not found.")
+        return {"status": "updated"}
+
+
+@app.put("/tickets/{ticket_id}/department", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=UpdateResponse)
+def update_ticket_department(ticket_id: int, payload: DepartmentUpdateRequest):
+    """Update the department assigned to a ticket."""
+    with _get_engine().begin() as conn:
+        result = conn.execute(
+            text("UPDATE ost_ticket SET dept_id = :dept_id, updated = NOW() WHERE ticket_id = :id"),
+            {"dept_id": payload.dept_id, "id": ticket_id}
+        )
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Ticket not found.")
+        return {"status": "updated"}
+
+
+@app.put("/tickets/{ticket_id}/team", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=UpdateResponse)
+def update_ticket_team(ticket_id: int, payload: TeamUpdateRequest):
+    """Update the team assigned to a ticket."""
+    with _get_engine().begin() as conn:
+        result = conn.execute(
+            text("UPDATE ost_ticket SET team_id = :team_id, updated = NOW() WHERE ticket_id = :id"),
+            {"team_id": payload.team_id, "id": ticket_id}
+        )
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Ticket not found.")
+        return {"status": "updated"}
+
+
+@app.put("/tickets/{ticket_id}/message", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=UpdateResponse)
+def update_ticket_message(ticket_id: int, payload: MessageUpdateRequest):
+    """Update the latest message entry on a ticket thread."""
+    if payload.title is None and payload.body is None:
+        raise HTTPException(status_code=400, detail="At least one of title or body must be provided.")
+
+    with _get_engine().begin() as conn:
+        entry = conn.execute(
+            text("""
+                SELECT te.id
+                FROM ost_thread_entry te
+                JOIN ost_thread th ON te.thread_id = th.id
+                WHERE th.object_id = :ticket_id AND th.object_type = 'T'
+                ORDER BY te.id DESC
+                LIMIT 1
+            """),
+            {"ticket_id": ticket_id}
+        ).scalar_one_or_none()
+        if entry is None:
+            raise HTTPException(status_code=404, detail="Ticket not found or has no thread entries.")
+
+        updates = ["updated = NOW()"]
+        params = {"entry_id": entry, "ticket_id": ticket_id}
+        if payload.title is not None:
+            updates.append("title = :title")
+            params["title"] = payload.title
+        if payload.body is not None:
+            updates.append("body = :body")
+            params["body"] = payload.body
+
+        conn.execute(
+            text(f"UPDATE ost_thread_entry SET {', '.join(updates)} WHERE id = :entry_id"),
+            params
+        )
+        conn.execute(
+            text("UPDATE ost_ticket SET updated = NOW() WHERE ticket_id = :ticket_id"),
+            {"ticket_id": ticket_id}
+        )
+        return {"status": "updated"}
+
+
+@app.put("/tickets/{ticket_id}/attachment/{file_id}", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=UpdateResponse)
+async def update_ticket_attachment(ticket_id: int, file_id: int, file: UploadFile = File(...)):
+    """Replace the contents of an existing attachment on a ticket."""
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large. Maximum allowed size is {MAX_UPLOAD_MB} MB.")
+
+    f_hash = base64.b64encode(hashlib.sha256(data).digest()).decode()
+
+    try:
+        with _get_engine().begin() as conn:
+            attachment = conn.execute(
+                text("""
+                    SELECT a.object_id
+                    FROM ost_attachment a
+                    JOIN ost_thread_entry te ON te.id = a.object_id
+                    JOIN ost_thread th ON th.id = te.thread_id
+                    WHERE a.file_id = :file_id AND a.type = 'H' AND th.object_id = :ticket_id AND th.object_type = 'T'
+                """),
+                {"file_id": file_id, "ticket_id": ticket_id}
+            ).scalar_one_or_none()
+            if attachment is None:
+                raise HTTPException(status_code=404, detail="Attachment not found for this ticket.")
+
+            conn.execute(
+                text("""
+                    UPDATE ost_file
+                    SET ft = :ft, type = :file_type, size = :size, name = :name, `key` = :key, signature = :sig
+                    WHERE id = :file_id
+                """),
+                {
+                    "ft": "T",
+                    "file_type": file.content_type,
+                    "size": len(data),
+                    "name": file.filename,
+                    "key": f_hash[:32],
+                    "sig": f_hash,
+                    "file_id": file_id,
+                }
+            )
+            conn.execute(
+                text("DELETE FROM ost_file_chunk WHERE file_id = :file_id AND chunk_id = 0"),
+                {"file_id": file_id}
+            )
+            conn.execute(
+                text("INSERT INTO ost_file_chunk (file_id, chunk_id, filedata) VALUES (:file_id, 0, :data)"),
+                {"file_id": file_id, "data": data}
+            )
+            conn.execute(
+                text("UPDATE ost_ticket SET updated = NOW() WHERE ticket_id = :ticket_id"),
+                {"ticket_id": ticket_id}
+            )
+            return {"status": "updated"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="An internal error occurred while updating the attachment.") from e
 
 
 @app.put("/tickets/{ticket_id}/close", dependencies=[Depends(verify_token)], tags=["Tickets"],
