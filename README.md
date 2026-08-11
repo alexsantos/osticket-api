@@ -267,6 +267,84 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -F "file=@/path/to/your/file.txt"
         ```
 
+-   **PUT /tickets/{ticket_id}/status**
+    -   **Description:** Updates a ticket's status.
+    -   **Path Parameter:**
+        -   `ticket_id`: The ID of the ticket to update.
+    -   **Errors:**
+        -   `404` if the ticket does not exist.
+    -   **Example:**
+        ```bash
+        curl -X PUT "http://localhost:8080/tickets/123/status" \
+        -H "X-API-Key: your_osTicket_api_key" \
+        -d '{
+          "status_id": 1
+        }
+        ```
+
+-   **PUT /tickets/{ticket_id}/department**
+    -   **Description:** Updates a ticket's department.
+    -   **Path Parameter:**
+        -   `ticket_id`: The ID of the ticket to update.
+    -   **Errors:**
+        -   `404` if the ticket does not exist.
+    -   **Example:**
+        ```bash
+        curl -X PUT "http://localhost:8080/tickets/123/department" \
+        -H "X-API-Key: your_osTicket_api_key" \
+        -d '{
+          "dept_id": 1
+        }
+        ```
+
+-   **PUT /tickets/{ticket_id}/team**
+    -   **Description:** Updates a ticket's team.
+    -   **Path Parameter:**
+        -   `ticket_id`: The ID of the ticket to update.
+    -   **Errors:**
+        -   `404` if the ticket does not exist.
+    -   **Example:**
+        ```bash
+        curl -X PUT "http://localhost:8080/tickets/123/team" \
+        -H "X-API-Key: your_osTicket_api_key" \
+        -d '{
+          "team_id": 1
+        }
+        ```
+
+-   **PUT /tickets/{ticket_id}/message**
+    -   **Description:** Updates the latest message entry on a ticket thread.
+    -   **Path Parameter:**
+        -   `ticket_id`: The ID of the ticket to update.
+    -   **Errors:**
+        -   `404` if the ticket does not exist.
+    -   **Example:**
+        ```bash
+        curl -X PUT "http://localhost:8080/tickets/123/message" \
+        -H "X-API-Key: your_osTicket_api_key" \
+        -d '{
+          "title": "Test Message",
+          "body": "This is a test message.",
+        }
+        ```
+
+-   **PUT /tickets/{ticket_id}/attachment/{file_id}**
+    -   **Description:** Replaces the contents of an existing attachment on a ticket.
+    -   **Path Parameter:**
+        -   `ticket_id`: The ID of the ticket to update.
+        -   `file_id`: The ID of the attachment to update.
+    -   **Form Data:**
+        -   `file`: The file to attach. Maximum size is controlled by `MAX_UPLOAD_MB` (default 10 MB). Files exceeding the limit return `413`.
+    -   **Errors:**
+        -   `404` if the attachment does not exist.
+        -   `413` if the file exceeds the configured size limit.
+    -   **Example:**
+        ```bash
+        curl -X PUT "http://localhost:8080/tickets/123/attachment/1" \
+        -H "X-API-Key: your_osTicket_api_key" \        
+        -F "file=@/path/to/your/file.txt"
+        ```
+
 -   **PUT /tickets/{ticket_id}/close**
     -   **Description:** Closes a ticket by setting its status to the configured "closed" state in osTicket.
     -   **Path Parameter:**
