@@ -13,6 +13,23 @@ class TicketCreate(BaseModel):
     dept_id: Optional[int] = None
 
 
+class StatusUpdateRequest(BaseModel):
+    status_id: int
+
+
+class DepartmentUpdateRequest(BaseModel):
+    dept_id: int
+
+
+class TeamUpdateRequest(BaseModel):
+    team_id: int
+
+
+class MessageUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    body: Optional[str] = None
+
+
 # --- Response Models ---
 class HealthResponse(BaseModel):
     status: str
@@ -88,4 +105,8 @@ class AttachmentResponse(BaseModel):
 
 
 class CloseResponse(BaseModel):
+    status: str
+
+
+class UpdateResponse(BaseModel):
     status: str
