@@ -32,6 +32,10 @@ To run this application, you need to configure the following environment variabl
 
 - `MAX_UPLOAD_MB`: Maximum file size (in megabytes) accepted by the attachment endpoint. Defaults to `10`.
 
+### Root Path
+
+- `ROOT_PATH`: Sub-path the API is mounted under behind a reverse proxy (e.g. `/osticket-dop`). Leave empty when serving from the domain root. The proxy must strip this prefix before forwarding requests to the container; this variable only makes generated URLs (docs, redirects) resolve correctly. Defaults to `` (empty).
+
 ## API Keys
 
 This API uses the API keys configured within your osTicket installation. To create and manage API keys, log in to your osTicket admin panel and navigate to `Admin Panel > Manage > API Keys`.
@@ -79,6 +83,7 @@ docker run -d -p 8080:8080 \
   -e DB_PORT="3306" \
   -e PORT="8080" \
   -e MAX_UPLOAD_MB="10" \
+  -e ROOT_PATH="/osticket-dop" \
   --name osticket-api-container \
   osticket-api
 ```
@@ -219,7 +224,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
             ```
 
 -   **GET /tickets/{ticket_id}**
-    -   **Description:** Retrieves a single ticket by its ID, including all associated custom field data.
+    -   **Description:** Retrieves a single ticket by its ID, including all associated custom field data, its original `subject`/`message` (from the ticket thread's first entry), and `closed` timestamp (`null` if still open). Note: `GET /tickets` (list) does not include `subject`/`message`/`closed` - fetch the individual ticket for those.
     -   **Example:**
         ```bash
         curl -X GET "http://localhost:8080/tickets/123" -H "X-API-Key: your_osTicket_api_key"
@@ -267,6 +272,27 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -F "file=@/path/to/your/file.txt"
         ```
 
+-   **POST /tickets/{ticket_id}/note**
+    -   **Description:** Adds an internal (staff-only) note to a ticket's thread. Notes are never visible to the ticket's owner and generate no outbound email — useful for integrations to leave an audit trail.
+    -   **Path Parameter:**
+        -   `ticket_id`: The ID of the ticket to add the note to.
+    -   **Request Body:**
+        -   `body` (required): The note's content.
+        -   `title` (optional): A short title for the note.
+        -   `poster` (optional, default: `"API"`): The display name attributed as the note's author.
+    -   **Errors:**
+        -   `404` if the ticket does not exist.
+    -   **Example:**
+        ```bash
+        curl -X POST "http://localhost:8080/tickets/123/note" \
+        -H "Content-Type: application/json" \
+        -H "X-API-Key: your_osTicket_api_key" \
+        -d '{
+          "body": "Forwarded to Ops as ticket #456.",
+          "poster": "Ticket-Sync"
+        }'
+        ```
+
 -   **PUT /tickets/{ticket_id}/status**
     -   **Description:** Updates a ticket's status.
     -   **Path Parameter:**
@@ -279,7 +305,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -H "X-API-Key: your_osTicket_api_key" \
         -d '{
           "status_id": 1
-        }
+        }'
         ```
 
 -   **PUT /tickets/{ticket_id}/department**
@@ -294,7 +320,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -H "X-API-Key: your_osTicket_api_key" \
         -d '{
           "dept_id": 1
-        }
+        }'
         ```
 
 -   **PUT /tickets/{ticket_id}/team**
@@ -309,7 +335,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -H "X-API-Key: your_osTicket_api_key" \
         -d '{
           "team_id": 1
-        }
+        }'
         ```
 
 -   **PUT /tickets/{ticket_id}/message**
@@ -324,8 +350,8 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -H "X-API-Key: your_osTicket_api_key" \
         -d '{
           "title": "Test Message",
-          "body": "This is a test message.",
-        }
+          "body": "This is a test message."
+        }'
         ```
 
 -   **PUT /tickets/{ticket_id}/attachment/{file_id}**
@@ -341,7 +367,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
     -   **Example:**
         ```bash
         curl -X PUT "http://localhost:8080/tickets/123/attachment/1" \
-        -H "X-API-Key: your_osTicket_api_key" \        
+        -H "X-API-Key: your_osTicket_api_key" \
         -F "file=@/path/to/your/file.txt"
         ```
 

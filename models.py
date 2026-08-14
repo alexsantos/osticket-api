@@ -13,6 +13,12 @@ class TicketCreate(BaseModel):
     dept_id: Optional[int] = None
 
 
+class NoteCreate(BaseModel):
+    body: str
+    title: Optional[str] = None
+    poster: Optional[str] = "API"
+
+
 class StatusUpdateRequest(BaseModel):
     status_id: int
 
@@ -83,6 +89,9 @@ class TicketItem(BaseModel):
     user_id: int
     user_name: str
     user_email: str
+    subject: Optional[str] = None
+    message: Optional[str] = None
+    closed: Optional[datetime] = None
     custom_fields: Optional[dict] = None
 
 
@@ -102,6 +111,10 @@ class TicketCreateResponse(BaseModel):
 
 class AttachmentResponse(BaseModel):
     file_id: int
+
+
+class NoteResponse(BaseModel):
+    entry_id: int
 
 
 class CloseResponse(BaseModel):

@@ -14,7 +14,7 @@ from sqlalchemy import create_engine, text, event
 from sqlalchemy.engine import Engine, URL
 
 from models import (AttachmentResponse, CloseResponse, DepartmentResponse,
-                    HealthResponse, PaginatedTicketResponse, StatusResponse,
+                    HealthResponse, NoteCreate, NoteResponse, PaginatedTicketResponse, StatusResponse,
                     TicketCreate, TicketCreateResponse, TopicResponse, UserResponse, PaginatedUserResponse, TicketItem,
                     StatusUpdateRequest, DepartmentUpdateRequest, TeamUpdateRequest, MessageUpdateRequest,
                     UpdateResponse)
@@ -156,7 +156,7 @@ async def verify_token(x_api_key: str = Header(...)):
             raise HTTPException(status_code=403, detail="API Key is not active")
 
 app = FastAPI(
-    title="osTicket Ultimate Python API", version="0.8.3", lifespan=lifespan
+    title="osTicket Ultimate Python API", version="0.9.0", lifespan=lifespan
 )
 
 
@@ -494,13 +494,20 @@ def get_ticket(ticket_id: int):
                        d.name     as dept_name,
                        t.user_id,
                        u.name     as user_name,
-                       ue.address as user_email
+                       ue.address as user_email,
+                       t.closed,
+                       te.title   as subject,
+                       te.body    as message
                 FROM ost_ticket t
                          JOIN ost_ticket_status s ON t.status_id = s.id
                          JOIN ost_user u ON t.user_id = u.id
                          JOIN ost_user_email ue ON u.id = ue.user_id
                          LEFT JOIN ost_help_topic ht ON t.topic_id = ht.topic_id
                          LEFT JOIN ost_department d ON t.dept_id = d.id
+                         LEFT JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
+                         LEFT JOIN ost_thread_entry te ON te.id = (
+                             SELECT MIN(id) FROM ost_thread_entry WHERE thread_id = th.id
+                         )
                 WHERE t.ticket_id = :ticket_id \
                 """
         result = conn.execute(text(query), {"ticket_id": ticket_id}).mappings().first()
@@ -663,6 +670,38 @@ async def add_attachment(ticket_id: int, file: UploadFile = File(...)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="An internal error occurred while processing the attachment.") from e
+
+
+@app.post("/tickets/{ticket_id}/note", dependencies=[Depends(verify_token)], tags=["Tickets"],
+          response_model=NoteResponse)
+def add_note(ticket_id: int, note: NoteCreate):
+    """
+    Add an internal note to a ticket's thread.
+
+    Notes are staff-only: unlike a message/response, they are never visible
+    to the ticket's owner and generate no outbound email. Useful for
+    integrations to leave an audit trail (e.g. "Forwarded to Ops as #123")
+    without notifying the requester. Returns 404 if the ticket does not exist.
+    """
+    try:
+        with _get_engine().begin() as conn:
+            thread_id = conn.execute(
+                text("SELECT id FROM ost_thread WHERE object_id = :tid AND object_type = 'T'"),
+                {"tid": ticket_id}).scalar()
+            if thread_id is None:
+                raise HTTPException(status_code=404, detail="Ticket not found.")
+
+            res = conn.execute(text("""
+                                    INSERT INTO ost_thread_entry (thread_id, type, title, body, poster, source, created, updated)
+                                    VALUES (:thid, 'N', :title, :body, :poster, 'API', NOW(), NOW())
+                                    """), {"thid": thread_id, "title": note.title or "", "body": note.body,
+                                           "poster": note.poster or "API"})
+
+            return {"entry_id": res.lastrowid}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="An internal error occurred while adding the note.") from e
 
 
 @app.put("/tickets/{ticket_id}/status", dependencies=[Depends(verify_token)], tags=["Tickets"],
@@ -832,8 +871,8 @@ def close_ticket(ticket_id: int):
 
 
 @app.get("/", include_in_schema=False)
-async def redirect_to_docs():  # pragma: no cover
-    return RedirectResponse(url="/redoc")
+async def redirect_to_docs(request: Request):  # pragma: no cover
+    return RedirectResponse(url=f"{request.scope.get('root_path', '')}/redoc")
 
 
 if __name__ == "__main__":  # pragma: no cover
@@ -842,4 +881,5 @@ if __name__ == "__main__":  # pragma: no cover
     # Load .env file for direct script execution
     load_dotenv()
     port = int(os.environ.get("PORT", 8080))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    root_path = os.environ.get("ROOT_PATH", "")
+    uvicorn.run(app, host="0.0.0.0", port=port, root_path=root_path)

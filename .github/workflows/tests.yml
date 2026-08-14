@@ -26,7 +26,7 @@ jobs:
           enable-cache: true
 
       - name: Set up Python
-        run: uv python install 3.12
+        run: uv python install 3.14
 
       - name: Install dependencies
         run: uv sync --all-extras --dev
@@ -34,13 +34,28 @@ jobs:
       - name: Start services
         run: |
           docker compose -f docker-compose.test.yml up -d
-          
-          echo "Waiting for MySQL..."
-          until docker exec $(docker ps -q -f name=osticket-test-db) mysqladmin ping -h "localhost" -u root -ptestpassword --silent; do
+
+          # `mysqladmin ping` can succeed against the throwaway temp server the
+          # MariaDB entrypoint boots to apply init scripts, before it restarts
+          # into the real server - a window where connections get reset. Wait
+          # for an actual authenticated query against the test DB/user instead,
+          # so we know the real server (with the schema and grants applied) is up.
+          echo "Waiting for MySQL to accept authenticated connections..."
+          ready=false
+          for i in $(seq 1 30); do
+            if docker exec "$(docker ps -q -f name=osticket-test-db)" \
+                mysql -h 127.0.0.1 -u testuser -ptestpassword osticket_test -e "SELECT 1" --silent >/dev/null 2>&1; then
+              echo "MySQL is ready!"
+              ready=true
+              break
+            fi
+            echo "Still initializing... ($i/30)"
             sleep 2
-            echo "Still initializing..."
           done
-          echo "MySQL is ready!"
+          if [ "$ready" != "true" ]; then
+            echo "::error::MySQL did not become ready in time"
+            exit 1
+          fi
 
       - name: Run tests with coverage
         env:
