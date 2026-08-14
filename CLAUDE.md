@@ -83,5 +83,10 @@ All application code lives in three files:
 | `DB_PORT` | No | `3306` |
 | `PORT` | No | `8080` |
 | `MAX_UPLOAD_MB` | No | `10` |
+| `ROOT_PATH` | No | `` (empty) |
 
 Copy `.env.example` to `.env` for local development. Tests use `.env.test`.
+
+## Versioning
+
+The project version is declared in two places that must be bumped together: `pyproject.toml` (`version`) and `main.py` (`FastAPI(..., version=...)`, which drives the version shown in `/docs`). Whenever one is bumped, update the other in the same change.
