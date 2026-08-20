@@ -79,6 +79,21 @@ def test_list_departments(client: TestClient, db_conn):
     assert {d["name"] for d in departments} == {"Support", "Sales"}
 
 
+def test_list_teams(client: TestClient, db_conn):
+    with db_conn.begin():
+        db_conn.execute(text("INSERT INTO ost_team (team_id, name, notes, created, updated) VALUES (1, 'Test Team', 'Team for testing', NOW(), NOW())"))
+        db_conn.execute(text("INSERT INTO ost_team (team_id, name, notes, created, updated) VALUES (2, 'Another Test Team', 'Another team for testing', NOW(), NOW())"))
+        api_key = "team-test-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    headers = {"X-API-Key": api_key}
+    response = client.get("/teams", headers=headers)
+    assert response.status_code == 200
+    teams = response.json()
+    assert len(teams) == 2
+    assert {t["name"] for t in teams} == {"Test Team", "Another Test Team"}
+
+
 def test_list_statuses(client: TestClient, db_conn):
     with db_conn.begin():
         db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, mode, flags, properties, created, updated) VALUES (1, 'Open', 'open', 3, 0, '{}', NOW(), NOW())"))
@@ -191,6 +206,8 @@ def test_list_tickets_pagination(client: TestClient, db_conn):
     with db_conn.begin():
         db_conn.execute(text("INSERT INTO ost_department (id, name, signature, ispublic, created, updated) VALUES (1, 'Support', '', 1, NOW(), NOW())"))
         db_conn.execute(text("INSERT INTO ost_department (id, name, signature, ispublic, created, updated) VALUES (2, 'Sales', '', 1, NOW(), NOW())"))
+        db_conn.execute(text("INSERT INTO ost_team (team_id, name, notes, created, updated) VALUES (1, 'First Line', '', NOW(), NOW())"))
+        db_conn.execute(text("INSERT INTO ost_team (team_id, name, notes, created, updated) VALUES (2, 'Escalations', '', NOW(), NOW())"))
         db_conn.execute(text("INSERT INTO ost_help_topic (topic_id, ispublic, noautoresp, topic, created, updated, isactive) VALUES (1, 1, 0, 'General', NOW(), NOW(), 1)"))
         db_conn.execute(text("INSERT INTO ost_help_topic (topic_id, ispublic, noautoresp, topic, created, updated, isactive) VALUES (2, 1, 0, 'Inquiries', NOW(), NOW(), 1)"))
         db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, mode, flags, properties, created, updated) VALUES (1, 'Open', 'open', 3, 0, '{}', NOW(), NOW())"))
@@ -205,11 +222,11 @@ def test_list_tickets_pagination(client: TestClient, db_conn):
             db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
 
         now = datetime.now()
-        db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, dept_id, topic_id, status_id, created, updated) VALUES ('101', :uid, 1, 2, 3, :ct, :ct)"), {"uid": user_ids[0], "ct": now})
-        db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, dept_id, topic_id, status_id, created, updated) VALUES ('102', :uid, 2, 1, 1, :ct, :ct)"), {"uid": user_ids[1], "ct": now - timedelta(seconds=1)})
-        db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, dept_id, topic_id, status_id, created, updated) VALUES ('103', :uid, 1, 1, 3, :ct, :ct)"), {"uid": user_ids[2], "ct": now - timedelta(seconds=2)})
-        db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, dept_id, topic_id, status_id, created, updated) VALUES ('104', :uid, 2, 1, 1, :ct, :ct)"), {"uid": user_ids[3], "ct": now - timedelta(seconds=3)})
-        db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, dept_id, topic_id, status_id, created, updated) VALUES ('105', :uid, 1, 1, 1, :ct, :ct)"), {"uid": user_ids[4], "ct": now - timedelta(seconds=4)})
+        db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, dept_id, team_id, topic_id, status_id, created, updated) VALUES ('101', :uid, 1, 1, 2, 3, :ct, :ct)"), {"uid": user_ids[0], "ct": now})
+        db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, dept_id, team_id, topic_id, status_id, created, updated) VALUES ('102', :uid, 2, 2, 1, 1, :ct, :ct)"), {"uid": user_ids[1], "ct": now - timedelta(seconds=1)})
+        db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, dept_id, team_id, topic_id, status_id, created, updated) VALUES ('103', :uid, 1, 1, 1, 3, :ct, :ct)"), {"uid": user_ids[2], "ct": now - timedelta(seconds=2)})
+        db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, dept_id, team_id, topic_id, status_id, created, updated) VALUES ('104', :uid, 2, 2, 1, 1, :ct, :ct)"), {"uid": user_ids[3], "ct": now - timedelta(seconds=3)})
+        db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, dept_id, team_id, topic_id, status_id, created, updated) VALUES ('105', :uid, 1, 1, 1, 1, :ct, :ct)"), {"uid": user_ids[4], "ct": now - timedelta(seconds=4)})
 
         api_key = "ticket-list-key"
         db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
@@ -297,6 +314,7 @@ def test_list_tickets_date_filters(client: TestClient, db_conn):
 def test_create_and_get_ticket(client: TestClient, db_conn):
     with db_conn.begin():
         db_conn.execute(text("INSERT INTO ost_department (id, name, signature, ispublic, created, updated) VALUES (1, 'Test Department', 'Test Signature', 1, NOW(), NOW())"))
+        db_conn.execute(text("INSERT INTO ost_team (team_id, name, notes, created, updated) VALUES (1, 'Test Team', 'Team for testing', NOW(), NOW())"))
         db_conn.execute(text("INSERT INTO ost_help_topic (topic_id, ispublic, noautoresp, topic, created, updated) VALUES (1, 1, 1, 'Test Topic', NOW(), NOW())"))
         db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, mode, flags, properties, created, updated) VALUES (1, 'Open', 'open', 3, 0, '{}', NOW(), NOW())"))
         db_conn.execute(text("INSERT INTO ost_sequence (id, name, next, updated) VALUES (1, 'ticket_number', 0, NOW())"))
@@ -326,6 +344,7 @@ def test_create_and_get_ticket(client: TestClient, db_conn):
 def test_create_ticket_with_seq_format(client: TestClient, db_conn):
     with db_conn.begin():
         db_conn.execute(text("INSERT INTO ost_department (id, name, signature, ispublic, created, updated) VALUES (1, 'Test Department', 'Test Signature', 1, NOW(), NOW())"))
+        db_conn.execute(text("INSERT INTO ost_team (team_id, name, notes, created, updated) VALUES (1, 'Test Team', 'Team for testing', NOW(), NOW())"))
         db_conn.execute(text("INSERT INTO ost_help_topic (topic_id, ispublic, noautoresp, topic, created, updated) VALUES (1, 1, 1, 'Test Topic', NOW(), NOW())"))
         db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, mode, flags, properties, created, updated) VALUES (1, 'Open', 'open', 3, 0, '{}', NOW(), NOW())"))
         db_conn.execute(text("INSERT INTO ost_sequence (id, name, next, updated) VALUES (1, 'ticket_number', 0, NOW())"))

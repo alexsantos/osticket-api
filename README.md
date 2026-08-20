@@ -162,6 +162,13 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         curl -X GET "http://localhost:8080/departments" -H "X-API-Key: your_osTicket_api_key"
         ```
 
+-   **GET /teams**
+    -   **Description:** Lists all available teams.
+    -   **Example:**
+        ```bash
+        curl -X GET "http://localhost:8080/teams" -H "X-API-Key: your_osTicket_api_key"
+        ```
+
 -   **GET /statuses**
     -   **Description:** Lists all ticket statuses.
     -   **Example:**
