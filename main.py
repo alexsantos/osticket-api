@@ -13,7 +13,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import create_engine, text, event
 from sqlalchemy.engine import Engine, URL
 
-from models import (AttachmentResponse, CloseResponse, DepartmentResponse,
+from models import (AttachmentResponse, CloseResponse, DepartmentResponse, TeamResponse,
                     HealthResponse, NoteCreate, NoteResponse, PaginatedTicketResponse, StatusResponse,
                     TicketCreate, TicketCreateResponse, TopicResponse, UserResponse, PaginatedUserResponse, TicketItem,
                     StatusUpdateRequest, DepartmentUpdateRequest, TeamUpdateRequest, MessageUpdateRequest,
@@ -189,6 +189,16 @@ def list_departments():
     """Lists available Departments (e.g., Support, Finance)."""
     with _get_engine().connect() as conn:
         query = text("SELECT id, name FROM ost_department ORDER BY name ASC")
+        results = conn.execute(query).mappings().all()
+        return [dict(row) for row in results]
+
+
+@app.get("/teams", dependencies=[Depends(verify_token)], tags=["Listings"],
+         response_model=List[TeamResponse])
+def list_teams():
+    """Lists available Teams."""
+    with _get_engine().connect() as conn:
+        query = text("SELECT team_id, name FROM ost_team ORDER BY name ASC")
         results = conn.execute(query).mappings().all()
         return [dict(row) for row in results]
 
@@ -412,13 +422,14 @@ def list_tickets(
         data_sql = f"""
             SELECT t.ticket_id, t.number, t.created, t.status_id, s.name as status_name, 
                    t.topic_id, ht.topic as topic_name, t.dept_id, d.name as dept_name, t.updated,
-                   t.user_id, u.name as user_name, ue.address as user_email
+                   t.user_id, u.name as user_name, ue.address as user_email, t.team_id, team.name as team_name
             FROM ost_ticket t
             JOIN ost_ticket_status s ON t.status_id = s.id
             JOIN ost_user u ON t.user_id = u.id
             JOIN ost_user_email ue ON u.id = ue.user_id
             LEFT JOIN ost_help_topic ht ON t.topic_id = ht.topic_id
             LEFT JOIN ost_department d ON t.dept_id = d.id
+            LEFT JOIN ost_team team ON t.team_id = team.team_id
             {custom_field_joins}
             {where_clause}
             ORDER BY t.created DESC, t.ticket_id DESC
@@ -478,7 +489,7 @@ def get_ticket(ticket_id: int):
     Retrieve a single ticket by its unique ID.
 
     Provides detailed information for a specific ticket, including its status, topic,
-    department, owner, and all associated custom field data. Returns a 404 error if the ticket cannot be found.
+    department, team, owner, and all associated custom field data. Returns a 404 error if the ticket cannot be found.
     """
     with _get_engine().connect() as conn:
         query = """
@@ -495,6 +506,8 @@ def get_ticket(ticket_id: int):
                        t.user_id,
                        u.name     as user_name,
                        ue.address as user_email,
+                       t.team_id,
+                       team.name as team_name,
                        t.closed,
                        te.title   as subject,
                        te.body    as message
@@ -508,6 +521,7 @@ def get_ticket(ticket_id: int):
                          LEFT JOIN ost_thread_entry te ON te.id = (
                              SELECT MIN(id) FROM ost_thread_entry WHERE thread_id = th.id
                          )
+                         LEFT JOIN ost_team team ON t.team_id = team.team_id
                 WHERE t.ticket_id = :ticket_id \
                 """
         result = conn.execute(text(query), {"ticket_id": ticket_id}).mappings().first()
