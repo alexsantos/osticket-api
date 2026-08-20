@@ -47,6 +47,11 @@ class DepartmentResponse(BaseModel):
     name: str
 
 
+class TeamResponse(BaseModel):
+    team_id: int
+    name: str
+
+
 class StatusResponse(BaseModel):
     id: int
     name: str
