@@ -5,11 +5,21 @@ from fastapi import Query, Request, HTTPException
 
 
 def make_url(request: Request, limit: int, offset: int) -> str:
-    """Helper function to rebuild the URL with a new offset."""
+    """
+    Helper function to rebuild the URL with a new offset.
+
+    Prefers X-Forwarded-Proto/X-Forwarded-Host over request.url, since behind
+    a gateway (e.g. Cloud Run fronted by an API facade) the ASGI scope only
+    sees the internal host, not the one the client actually called.
+    """
     query_params = dict(request.query_params)
     query_params['limit'] = str(limit)
     query_params['offset'] = str(offset)
-    base_url = str(request.url).split('?')[0]
+
+    scheme = request.headers.get('x-forwarded-proto', request.url.scheme)
+    host = request.headers.get('x-forwarded-host', request.url.netloc)
+    base_url = f"{scheme}://{host}{request.url.path}"
+
     return f"{base_url}?{urlencode(query_params)}"
 
 
