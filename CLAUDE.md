@@ -90,3 +90,7 @@ Copy `.env.example` to `.env` for local development. Tests use `.env.test`.
 ## Versioning
 
 The project version is declared in two places that must be bumped together: `pyproject.toml` (`version`) and `main.py` (`FastAPI(..., version=...)`, which drives the version shown in `/docs`). Whenever one is bumped, update the other in the same change.
+
+## Branching Model
+
+This project follows git-flow: `main` holds released code, `develop` is the integration branch, and `feature/*`, `release/*`, and `hotfix/*` branches are cut from and merged back per the usual git-flow rules. Hotfixes branch off `main`, get merged into both `main` and `develop`, and are deleted afterward. The repo has two remotes, `origin` (Bitbucket, primary) and `github` (mirror); keep both in sync when pushing `main`/`develop`.
