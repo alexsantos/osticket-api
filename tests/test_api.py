@@ -716,7 +716,6 @@ def test_close_ticket_not_found(client: TestClient, db_conn):
     assert response.json()["detail"] == "Ticket not found."
 
 
-
 def test_update_ticket_metadata_and_message(client: TestClient, db_conn):
     with db_conn.begin():
         api_key = "ticket-update-key"
@@ -1007,3 +1006,32 @@ def test_list_tickets_with_json_number_custom_field(client: TestClient, db_conn:
     assert response.json()["total"] == 1
     item = response.json()["items"][0]
     assert item["custom_fields"]["amount"] == 123.45
+
+def test_get_ticket_messages(client: TestClient, db_conn):
+    with db_conn.begin():
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Content User', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'content@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated, closed) VALUES ('CONTENT-1', :uid, 1, NOW(), NOW(), '2026-01-02 03:04:05')"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+        db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, properties, created, updated) VALUES (1, 'Open', 'open', '{}', NOW(), NOW())"))
+
+        thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
+        thread_id = thread_res.lastrowid
+
+        db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, type, title, body, poster, created, updated) VALUES (:thid, 'M', 'A message', 'Message text', 'Poster', NOW(), NOW())"), {"thid": thread_id})
+        db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, type, title, body, poster, created, updated) VALUES (:thid, 'R', 'A reply', 'Reply text', 'Poster', NOW(), NOW())"), {"thid": thread_id})
+        db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, type, title, body, poster, created, updated) VALUES (:thid, 'N', 'A note', 'Note text', 'Poster', NOW(), NOW())"), {"thid": thread_id})
+
+        api_key = "content-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    headers = {"X-API-Key": api_key}
+    response = client.get(f"/tickets/{ticket_id}/messages", headers=headers)
+    assert response.status_code == 200
+    messages = response.json()
+    assert len(messages) == 2
+    assert {m["subject"] for m in messages} == {"A message", "A reply"}
+    assert {m["message"] for m in messages} == {"Message text", "Reply text"}

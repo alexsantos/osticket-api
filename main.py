@@ -15,7 +15,7 @@ from sqlalchemy.engine import Engine, URL
 
 from models import (AttachmentResponse, CloseResponse, DepartmentResponse, TeamResponse,
                     HealthResponse, NoteCreate, NoteResponse, PaginatedTicketResponse, StatusResponse,
-                    TicketCreate, TicketCreateResponse, TopicResponse, UserResponse, PaginatedUserResponse, TicketItem,
+                    TicketCreate, TicketCreateResponse, TopicResponse, UserResponse, PaginatedUserResponse, TicketItem, MessagesResponse,
                     StatusUpdateRequest, DepartmentUpdateRequest, TeamUpdateRequest, MessageUpdateRequest,
                     UpdateResponse)
 from utils import build_pagination_urls, CommaSeparatedInts
@@ -553,6 +553,43 @@ def get_ticket(ticket_id: int):
 
         final_item['custom_fields'] = custom_fields_map
         return final_item
+
+
+@app.get("/tickets/{ticket_id}/messages", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=List[MessagesResponse])
+def get_ticket_messages(ticket_id: int):
+    """
+    Retrieve the messages for a single ticket by its unique ID.
+    Returns a 404 error if the ticket cannot be found.
+    """
+    with _get_engine().connect() as conn:
+        query = """
+                SELECT t.ticket_id,
+                       te.thread_id,
+                       te.id as entry_id,
+                       te.staff_id,
+                       te.user_id,
+                       te.type,
+                       te.poster,
+                       te.editor,
+                       te.editor_type,
+                       te.source,
+                       te.format,
+                       te.title   as subject,
+                       te.body    as message,
+                       te.created,
+                       te.updated
+                FROM ost_ticket t
+                         JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
+                         JOIN ost_thread_entry te ON thread_id = th.id
+                WHERE (te.type IN ('M', 'R')) AND t.ticket_id = :ticket_id \
+                """
+        results = conn.execute(text(query), {"ticket_id": ticket_id}).mappings().all()
+
+        if not results:
+            raise HTTPException(status_code=404, detail="Ticket or Messages not found")
+
+        return [dict(row) for row in results]
 
 
 @app.post("/tickets", dependencies=[Depends(verify_token)], tags=["Tickets"], response_model=TicketCreateResponse)
