@@ -1,34 +1,74 @@
 import pytest
 from unittest.mock import Mock
+from starlette.datastructures import URL, Headers
 from utils import make_url
 from main import _server_supports_json_functions
+
+
+def _mock_request(url: str, query_params: dict, headers: dict = None) -> Mock:
+    mock_request = Mock()
+    mock_request.url = URL(url)
+    mock_request.query_params = query_params
+    mock_request.headers = Headers(headers or {})
+    return mock_request
+
 
 def test_make_url():
     """
     Unit tests for the make_url utility function.
     """
-    # --- 1. Mock the FastAPI Request object ---
-    # We only need the 'url' and 'query_params' attributes for this test.
-    mock_request = Mock()
-    mock_request.url = "http://testserver/users?email=test@example.com"
-    mock_request.query_params = {"email": "test@example.com", "limit": "50", "offset": "0"}
-
-    # --- 2. Test generating a 'next' URL ---
+    # --- 1. Test generating a 'next' URL ---
+    mock_request = _mock_request(
+        "http://testserver/users?email=test@example.com",
+        {"email": "test@example.com", "limit": "50", "offset": "0"},
+    )
     next_url = make_url(request=mock_request, limit=50, offset=50)
     # The query parameters should be correctly ordered and encoded
     assert next_url == "http://testserver/users?email=test%40example.com&limit=50&offset=50"
 
-    # --- 3. Test generating a 'previous' URL ---
-    # Update the mock for the second scenario
-    mock_request.query_params = {"email": "test@example.com", "limit": "50", "offset": "100"}
+    # --- 2. Test generating a 'previous' URL ---
+    mock_request = _mock_request(
+        "http://testserver/users?email=test@example.com",
+        {"email": "test@example.com", "limit": "50", "offset": "100"},
+    )
     prev_url = make_url(request=mock_request, limit=50, offset=50)
     assert prev_url == "http://testserver/users?email=test%40example.com&limit=50&offset=50"
 
-    # --- 4. Test with no initial query parameters ---
-    mock_request.url = "http://testserver/users"
-    mock_request.query_params = {"limit": "50", "offset": "0"}
+    # --- 3. Test with no initial query parameters ---
+    mock_request = _mock_request(
+        "http://testserver/users",
+        {"limit": "50", "offset": "0"},
+    )
     next_url_no_params = make_url(request=mock_request, limit=50, offset=50)
     assert next_url_no_params == "http://testserver/users?limit=50&offset=50"
+
+
+def test_make_url_prefers_forwarded_headers():
+    """
+    Behind a gateway (e.g. Cloud Run fronted by an API facade), the ASGI
+    scope only sees the internal host. X-Forwarded-Proto/X-Forwarded-Host
+    should be used to rebuild the URL the client actually called, when present.
+    """
+    mock_request = _mock_request(
+        "http://osticket-dgp-api-ext-a-648469268857.europe-west4.run.app/tickets",
+        {"limit": "50", "offset": "0"},
+        headers={
+            "x-forwarded-proto": "https",
+            "x-forwarded-host": "integration-facade.apis.uat.jmslab.pt",
+        },
+    )
+    next_url = make_url(request=mock_request, limit=50, offset=50)
+    assert next_url == "https://integration-facade.apis.uat.jmslab.pt/tickets?limit=50&offset=50"
+
+
+def test_make_url_falls_back_without_forwarded_headers():
+    """No X-Forwarded-* headers -> behavior is unchanged from before."""
+    mock_request = _mock_request(
+        "http://osticket-dgp-api-ext-a-648469268857.europe-west4.run.app/tickets",
+        {"limit": "50", "offset": "0"},
+    )
+    next_url = make_url(request=mock_request, limit=50, offset=50)
+    assert next_url == "http://osticket-dgp-api-ext-a-648469268857.europe-west4.run.app/tickets?limit=50&offset=50"
 
 
 @pytest.mark.parametrize("version_string, expected", [
