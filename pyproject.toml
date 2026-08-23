@@ -1,6 +1,6 @@
 [project]
 name = "osticket-api"
-version = "0.9.1"
+version = "0.9.2"
 description = "A new API for OSTicket"
 requires-python = ">=3.14"
 dependencies = [
