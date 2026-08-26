@@ -142,12 +142,14 @@ class AttachmentsResponse(BaseModel):
     ticket_id: int
     attachment_id: int
     file_id: int
+    thread_id: int
     entry_id: int
     name: str
     type: str
     size: int
     inline: int
     created: datetime
+    content: str
 
 
 class NoteResponse(BaseModel):
