@@ -1032,6 +1032,6 @@ def test_get_ticket_messages(client: TestClient, db_conn):
     response = client.get(f"/tickets/{ticket_id}/messages", headers=headers)
     assert response.status_code == 200
     messages = response.json()
-    assert len(messages) == 2
-    assert {m["subject"] for m in messages} == {"A message", "A reply"}
-    assert {m["message"] for m in messages} == {"Message text", "Reply text"}
+    assert len(messages) == 3
+    assert {m["subject"] for m in messages} == {"A message", "A reply", "A note"}
+    assert {m["message"] for m in messages} == {"Message text", "Reply text", "Note text"}

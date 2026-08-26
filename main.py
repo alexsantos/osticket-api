@@ -582,7 +582,7 @@ def get_ticket_messages(ticket_id: int):
                 FROM ost_ticket t
                          JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
                          JOIN ost_thread_entry te ON thread_id = th.id
-                WHERE (te.type IN ('M', 'R')) AND t.ticket_id = :ticket_id \
+                WHERE t.ticket_id = :ticket_id \
                 """
         results = conn.execute(text(query), {"ticket_id": ticket_id}).mappings().all()
 
