@@ -19,6 +19,13 @@ class NoteCreate(BaseModel):
     poster: Optional[str] = "API"
 
 
+class MessageCreate(BaseModel):
+    type: Optional[str] = "M"
+    body: str
+    title: Optional[str] = None
+    poster: Optional[str] = "API"
+
+
 class StatusUpdateRequest(BaseModel):
     status_id: int
 
@@ -58,6 +65,24 @@ class TeamResponse(BaseModel):
     name: str
 
 
+class MessagesResponse(BaseModel):
+    ticket_id: int
+    thread_id: int
+    entry_id: int
+    staff_id: Optional[int] = None
+    user_id: Optional[int] = None
+    type: str
+    poster: str
+    editor: Optional[int] = None
+    editor_type: Optional[str] = None
+    source: Optional[str] = None
+    format: Optional[str] = None
+    subject: Optional[str] = None
+    message: Optional[str] = None
+    created: datetime
+    updated: datetime
+
+
 class StatusResponse(BaseModel):
     id: int
     name: str
@@ -91,6 +116,8 @@ class TicketItem(BaseModel):
     topic_name: Optional[str] = None
     dept_id: Optional[int] = None
     dept_name: Optional[str] = None
+    team_id: Optional[int] = None
+    team_name: Optional[str] = None
     user_id: int
     user_name: str
     user_email: str
@@ -118,7 +145,26 @@ class AttachmentResponse(BaseModel):
     file_id: int
 
 
+class AttachmentsResponse(BaseModel):
+    ticket_id: int
+    attachment_id: int
+    file_id: int
+    thread_id: int
+    entry_id: int
+    name: str
+    type: str
+    size: int
+    inline: int
+    created: datetime
+    content: str
+
+
 class NoteResponse(BaseModel):
+    entry_id: int
+
+
+class MessageResponse(BaseModel):
+    thread_id: int
     entry_id: int
 
 

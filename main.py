@@ -14,10 +14,10 @@ from sqlalchemy import create_engine, text, event
 from sqlalchemy.engine import Engine, URL
 
 from models import (AttachmentResponse, CloseResponse, DepartmentResponse, TeamResponse,
-                    HealthResponse, NoteCreate, NoteResponse, PaginatedTicketResponse, StatusResponse,
-                    TicketCreate, TicketCreateResponse, TopicResponse, UserResponse, PaginatedUserResponse, TicketItem,
+                    HealthResponse, MessageCreate, MessageResponse, NoteCreate, NoteResponse, PaginatedTicketResponse, StatusResponse,
+                    TicketCreate, TicketCreateResponse, TopicResponse, UserResponse, PaginatedUserResponse, TicketItem, MessagesResponse,
                     StatusUpdateRequest, DepartmentUpdateRequest, TeamUpdateRequest, MessageUpdateRequest,
-                    UpdateResponse)
+                    UpdateResponse, AttachmentsResponse)
 from utils import build_pagination_urls, CommaSeparatedInts
 
 MAX_UPLOAD_MB: int = 10
@@ -555,6 +555,95 @@ def get_ticket(ticket_id: int):
         return final_item
 
 
+@app.get("/tickets/{ticket_id}/messages", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=List[MessagesResponse])
+def list_ticket_messages(ticket_id: int):
+    """
+    Retrieve the messages for a single ticket by its unique ID.
+    Returns a 404 error if the ticket cannot be found.
+    """
+    with _get_engine().connect() as conn:
+        query = """
+                SELECT t.ticket_id,
+                       te.thread_id,
+                       te.id as entry_id,
+                       te.staff_id,
+                       te.user_id,
+                       te.type,
+                       te.poster,
+                       te.editor,
+                       te.editor_type,
+                       te.source,
+                       te.format,
+                       te.title   as subject,
+                       te.body    as message,
+                       te.created,
+                       te.updated
+                FROM ost_ticket t
+                         JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
+                         JOIN ost_thread_entry te ON thread_id = th.id
+                WHERE t.ticket_id = :ticket_id \
+                """
+        results = conn.execute(text(query), {"ticket_id": ticket_id}).mappings().all()
+
+        if not results:
+            raise HTTPException(status_code=404, detail="Ticket or Messages not found")
+
+        return [dict(row) for row in results]
+
+
+@app.get("/tickets/{ticket_id}/attachments", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=List[AttachmentsResponse])
+def list_ticket_attachments(ticket_id: int):
+    """Retrieve the attachments for a single ticket by its unique ID."""
+    with _get_engine().connect() as conn:
+        query = """
+                SELECT t.ticket_id,
+                       a.id AS attachment_id,
+                       a.file_id,
+                       th.id AS thread_id,
+                       te.id AS entry_id,
+                       f.name,
+                       f.type,
+                       f.size,
+                       a.inline,
+                       f.created,
+                       fc.chunk_id,
+                       fc.filedata
+                FROM ost_ticket t
+                         JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
+                         JOIN ost_thread_entry te ON te.thread_id = th.id
+                         JOIN ost_attachment a ON a.object_id = te.id AND a.type = 'H'
+                         JOIN ost_file f ON f.id = a.file_id
+                         LEFT JOIN ost_file_chunk fc ON fc.file_id = f.id
+                WHERE t.ticket_id = :ticket_id
+                ORDER BY f.created ASC, a.id ASC, fc.chunk_id ASC
+                """
+        results = conn.execute(text(query), {"ticket_id": ticket_id}).mappings().all()
+
+        if not results:
+            raise HTTPException(status_code=404, detail="Ticket or Attachments not found")
+
+        attachments = {}
+        chunks = {}
+        for row in results:
+            attachment_id = row["attachment_id"]
+            if attachment_id not in attachments:
+                attachment = dict(row)
+                attachment.pop("chunk_id", None)
+                attachment.pop("filedata", None)
+                attachments[attachment_id] = attachment
+                chunks[attachment_id] = []
+            if row["filedata"] is not None:
+                chunks[attachment_id].append(row["filedata"])
+
+        response = []
+        for attachment_id, attachment in attachments.items():
+            attachment["content"] = base64.b64encode(b"".join(chunks[attachment_id])).decode("ascii")
+            response.append(attachment)
+        return response
+
+
 @app.post("/tickets", dependencies=[Depends(verify_token)], tags=["Tickets"], response_model=TicketCreateResponse)
 def create_ticket(ticket: TicketCreate):
     """
@@ -716,6 +805,52 @@ def add_note(ticket_id: int, note: NoteCreate):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="An internal error occurred while adding the note.") from e
+
+
+@app.post("/tickets/{ticket_id}/message", dependencies=[Depends(verify_token)], tags=["Tickets"],
+          response_model=MessageResponse)
+def add_message(ticket_id: int, message: MessageCreate):
+    """Add a public message or reply to a ticket's thread."""
+    try:
+        with _get_engine().begin() as conn:
+            thread_id = conn.execute(
+                text("""
+                    SELECT th.id
+                    FROM ost_ticket t
+                    JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
+                    WHERE t.ticket_id = :ticket_id
+                    ORDER BY th.id
+                    LIMIT 1
+                """),
+                {"ticket_id": ticket_id}).scalar_one_or_none()
+            if thread_id is None:
+                raise HTTPException(status_code=404, detail="Ticket not found or has no thread.")
+
+            entry_id = conn.execute(text("""
+                INSERT INTO ost_thread_entry (thread_id, type, title, body, poster, source, created, updated)
+                VALUES (:thread_id, :type, :title, :body, :poster, 'API', NOW(), NOW())
+                """), {
+                    "thread_id": thread_id,
+                    "type": message.type or "M",
+                    "title": message.title or "",
+                    "body": message.body,
+                    "poster": message.poster or "API",
+                }).lastrowid
+
+            conn.execute(text("""
+                UPDATE ost_thread
+                SET lastmessage = NOW(), lastresponse = NOW()
+                WHERE id = :thread_id
+                """), {"thread_id": thread_id})
+            conn.execute(
+                text("UPDATE ost_ticket SET updated = NOW() WHERE ticket_id = :ticket_id"),
+                {"ticket_id": ticket_id})
+
+            return {"thread_id": thread_id, "entry_id": entry_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="An internal error occurred while adding the message.") from e
 
 
 @app.put("/tickets/{ticket_id}/status", dependencies=[Depends(verify_token)], tags=["Tickets"],
