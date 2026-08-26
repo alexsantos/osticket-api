@@ -244,6 +244,13 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         curl -X GET "http://localhost:8080/tickets/123/messages" -H "X-API-Key: your_osTicket_api_key"
         ```
 
+-   **GET /tickets/{ticket_id}/attachments**
+    -   **Description:** Retrieves the attachments for a single ticket by its ID, including file metadata and the message entry they belong to.
+    -   **Example:**
+        ```bash
+        curl -X GET "http://localhost:8080/tickets/123/attachments" -H "X-API-Key: your_osTicket_api_key"
+        ```
+
 -   **POST /tickets**
     -   **Description:** Creates a new ticket.
     -   **Request Body:**

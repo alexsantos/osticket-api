@@ -17,7 +17,7 @@ from models import (AttachmentResponse, CloseResponse, DepartmentResponse, TeamR
                     HealthResponse, NoteCreate, NoteResponse, PaginatedTicketResponse, StatusResponse,
                     TicketCreate, TicketCreateResponse, TopicResponse, UserResponse, PaginatedUserResponse, TicketItem, MessagesResponse,
                     StatusUpdateRequest, DepartmentUpdateRequest, TeamUpdateRequest, MessageUpdateRequest,
-                    UpdateResponse)
+                    UpdateResponse, AttachmentsResponse)
 from utils import build_pagination_urls, CommaSeparatedInts
 
 MAX_UPLOAD_MB: int = 10
@@ -588,6 +588,37 @@ def get_ticket_messages(ticket_id: int):
 
         if not results:
             raise HTTPException(status_code=404, detail="Ticket or Messages not found")
+
+        return [dict(row) for row in results]
+
+
+@app.get("/tickets/{ticket_id}/attachments", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=List[AttachmentsResponse])
+def get_ticket_attachments(ticket_id: int):
+    """Retrieve the attachments for a single ticket by its unique ID."""
+    with _get_engine().connect() as conn:
+        query = """
+                SELECT t.ticket_id,
+                       a.id AS attachment_id,
+                       a.file_id,
+                       te.id AS entry_id,
+                       f.name,
+                       f.type,
+                       f.size,
+                       a.inline,
+                       f.created
+                FROM ost_ticket t
+                         JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
+                         JOIN ost_thread_entry te ON te.thread_id = th.id
+                         JOIN ost_attachment a ON a.object_id = te.id AND a.type = 'H'
+                         JOIN ost_file f ON f.id = a.file_id
+                WHERE t.ticket_id = :ticket_id
+                ORDER BY f.created ASC, a.id ASC
+                """
+        results = conn.execute(text(query), {"ticket_id": ticket_id}).mappings().all()
+
+        if not results:
+            raise HTTPException(status_code=404, detail="Ticket or Attachments not found")
 
         return [dict(row) for row in results]
 

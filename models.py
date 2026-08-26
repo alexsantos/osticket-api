@@ -138,6 +138,18 @@ class AttachmentResponse(BaseModel):
     file_id: int
 
 
+class AttachmentsResponse(BaseModel):
+    ticket_id: int
+    attachment_id: int
+    file_id: int
+    entry_id: int
+    name: str
+    type: str
+    size: int
+    inline: int
+    created: datetime
+
+
 class NoteResponse(BaseModel):
     entry_id: int
 
