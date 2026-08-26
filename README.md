@@ -237,6 +237,20 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         curl -X GET "http://localhost:8080/tickets/123" -H "X-API-Key: your_osTicket_api_key"
         ```
 
+-   **GET /tickets/{ticket_id}/messages**
+    -   **Description:** Retrieves the messages for a single ticket by its ID.
+    -   **Example:**
+        ```bash
+        curl -X GET "http://localhost:8080/tickets/123/messages" -H "X-API-Key: your_osTicket_api_key"
+        ```
+
+-   **GET /tickets/{ticket_id}/attachments**
+    -   **Description:** Retrieves the attachments for a single ticket by its ID, including file metadata, base64-encoded content, and the message entry they belong to.
+    -   **Example:**
+        ```bash
+        curl -X GET "http://localhost:8080/tickets/123/attachments" -H "X-API-Key: your_osTicket_api_key"
+        ```
+
 -   **POST /tickets**
     -   **Description:** Creates a new ticket.
     -   **Request Body:**
@@ -297,6 +311,35 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -d '{
           "body": "Forwarded to Ops as ticket #456.",
           "poster": "Ticket-Sync"
+        }'
+        ```
+
+-   **POST /tickets/{ticket_id}/message**
+    -   **Description:** Adds a public message or reply to a ticket's thread and returns the created thread and entry IDs.
+    -   **Path Parameter:**
+        -   `ticket_id`: The ID of the ticket to reply to.
+    -   **Request Body:**
+        -   `type` (optional, default: `"M"`): The message type.
+        -   `body` (required): The message content.
+        -   `title` (optional): A short subject for the message.
+        -   `poster` (optional, default: `"API"`): The display name attributed as the message's author.
+    -   **Response:**
+        ```json
+        {
+          "thread_id": 12,
+          "entry_id": 34
+        }
+        ```
+    -   **Errors:**
+        -   `404` if the ticket does not exist or has no thread.
+    -   **Example:**
+        ```bash
+        curl -X POST "http://localhost:8080/tickets/123/message" \
+        -H "Content-Type: application/json" \
+        -H "X-API-Key: your_osTicket_api_key" \
+        -d '{
+          "title": "Status update",
+          "body": "The requested update is ready."
         }'
         ```
 
