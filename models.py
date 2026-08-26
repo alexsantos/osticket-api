@@ -19,6 +19,13 @@ class NoteCreate(BaseModel):
     poster: Optional[str] = "API"
 
 
+class MessageCreate(BaseModel):
+    type: Optional[str] = "M"
+    body: str
+    title: Optional[str] = None
+    poster: Optional[str] = "API"
+
+
 class StatusUpdateRequest(BaseModel):
     status_id: int
 
@@ -153,6 +160,11 @@ class AttachmentsResponse(BaseModel):
 
 
 class NoteResponse(BaseModel):
+    entry_id: int
+
+
+class MessageResponse(BaseModel):
+    thread_id: int
     entry_id: int
 
 

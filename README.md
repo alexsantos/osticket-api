@@ -314,6 +314,34 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         }'
         ```
 
+-   **POST /tickets/{ticket_id}/message**
+    -   **Description:** Adds a public message or reply to a ticket's thread and returns the created thread and entry IDs.
+    -   **Path Parameter:**
+        -   `ticket_id`: The ID of the ticket to reply to.
+    -   **Request Body:**
+        -   `body` (required): The message content.
+        -   `title` (optional): A short subject for the message.
+        -   `poster` (optional, default: `"API"`): The display name attributed as the message's author.
+    -   **Response:**
+        ```json
+        {
+          "thread_id": 12,
+          "entry_id": 34
+        }
+        ```
+    -   **Errors:**
+        -   `404` if the ticket does not exist or has no thread.
+    -   **Example:**
+        ```bash
+        curl -X POST "http://localhost:8080/tickets/123/message" \
+        -H "Content-Type: application/json" \
+        -H "X-API-Key: your_osTicket_api_key" \
+        -d '{
+          "title": "Status update",
+          "body": "The requested update is ready."
+        }'
+        ```
+
 -   **PUT /tickets/{ticket_id}/status**
     -   **Description:** Updates a ticket's status.
     -   **Path Parameter:**

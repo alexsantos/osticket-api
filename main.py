@@ -14,7 +14,7 @@ from sqlalchemy import create_engine, text, event
 from sqlalchemy.engine import Engine, URL
 
 from models import (AttachmentResponse, CloseResponse, DepartmentResponse, TeamResponse,
-                    HealthResponse, NoteCreate, NoteResponse, PaginatedTicketResponse, StatusResponse,
+                    HealthResponse, MessageCreate, MessageResponse, NoteCreate, NoteResponse, PaginatedTicketResponse, StatusResponse,
                     TicketCreate, TicketCreateResponse, TopicResponse, UserResponse, PaginatedUserResponse, TicketItem, MessagesResponse,
                     StatusUpdateRequest, DepartmentUpdateRequest, TeamUpdateRequest, MessageUpdateRequest,
                     UpdateResponse, AttachmentsResponse)
@@ -805,6 +805,52 @@ def add_note(ticket_id: int, note: NoteCreate):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="An internal error occurred while adding the note.") from e
+
+
+@app.post("/tickets/{ticket_id}/message", dependencies=[Depends(verify_token)], tags=["Tickets"],
+          response_model=MessageResponse)
+def add_message(ticket_id: int, message: MessageCreate):
+    """Add a public message or reply to a ticket's thread."""
+    try:
+        with _get_engine().begin() as conn:
+            thread_id = conn.execute(
+                text("""
+                    SELECT th.id
+                    FROM ost_ticket t
+                    JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
+                    WHERE t.ticket_id = :ticket_id
+                    ORDER BY th.id
+                    LIMIT 1
+                """),
+                {"ticket_id": ticket_id}).scalar_one_or_none()
+            if thread_id is None:
+                raise HTTPException(status_code=404, detail="Ticket not found or has no thread.")
+
+            entry_id = conn.execute(text("""
+                INSERT INTO ost_thread_entry (thread_id, type, title, body, poster, source, created, updated)
+                VALUES (:thread_id, :type, :title, :body, :poster, 'API', NOW(), NOW())
+                """), {
+                    "thread_id": thread_id,
+                    "type": message.type or "M",
+                    "title": message.title or "",
+                    "body": message.body,
+                    "poster": message.poster or "API",
+                }).lastrowid
+
+            conn.execute(text("""
+                UPDATE ost_thread
+                SET lastmessage = NOW(), lastresponse = NOW()
+                WHERE id = :thread_id
+                """), {"thread_id": thread_id})
+            conn.execute(
+                text("UPDATE ost_ticket SET updated = NOW() WHERE ticket_id = :ticket_id"),
+                {"ticket_id": ticket_id})
+
+            return {"thread_id": thread_id, "entry_id": entry_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="An internal error occurred while adding the message.") from e
 
 
 @app.put("/tickets/{ticket_id}/status", dependencies=[Depends(verify_token)], tags=["Tickets"],

@@ -666,6 +666,40 @@ def test_add_note_to_ticket(client: TestClient, db_conn):
     assert row["title"] == ""
 
 
+def test_add_message_to_ticket_returns_thread_and_entry_ids(client: TestClient, db_conn):
+    with db_conn.begin():
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Message User', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'message@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('MESSAGE-1', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+        thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
+        thread_id = thread_res.lastrowid
+
+        api_key = "message-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    response = client.post(
+        f"/tickets/{ticket_id}/message",
+        headers={"X-API-Key": api_key},
+        json={"title": "A reply", "body": "The requested update is ready."},
+    )
+    assert response.status_code == 200
+    assert response.json()["thread_id"] == thread_id
+    entry_id = response.json()["entry_id"]
+    assert entry_id > 0
+
+    with db_conn.begin():
+        row = db_conn.execute(text("SELECT thread_id, type, body, poster, title FROM ost_thread_entry WHERE id = :id"), {"id": entry_id}).mappings().first()
+    assert row["thread_id"] == thread_id
+    assert row["type"] == "M"
+    assert row["body"] == "The requested update is ready."
+    assert row["poster"] == "API"
+    assert row["title"] == "A reply"
+
+
 def test_add_note_default_poster(client: TestClient, db_conn):
     with db_conn.begin():
         user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Note User 2', NOW(), NOW(), 0)"))
