@@ -319,6 +319,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
     -   **Path Parameter:**
         -   `ticket_id`: The ID of the ticket to reply to.
     -   **Request Body:**
+        -   `type` (optional, default: `"M"`): The message type.
         -   `body` (required): The message content.
         -   `title` (optional): A short subject for the message.
         -   `poster` (optional, default: `"API"`): The display name attributed as the message's author.
