@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from fastapi import (Depends, FastAPI, File, Header, HTTPException, Query,
                      Request, UploadFile)
 from fastapi.responses import RedirectResponse
-from sqlalchemy import create_engine, text, event
+from sqlalchemy import bindparam, create_engine, text, event
 from sqlalchemy.engine import Engine, URL
 
 from models import (AttachmentResponse, CloseResponse, DepartmentResponse, TeamResponse,
@@ -483,6 +483,44 @@ def list_tickets(
         }
 
 
+@app.get("/tickets/messages", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=List[MessagesResponse])
+def list_ticket_messages(ticket_ids: List[int] = Depends(CommaSeparatedInts("ticket_ids"))):
+    """
+    Retrieve the messages for a list of tickets by their unique IDs.
+    Returns a 404 error if no matching tickets or messages are found.
+    """
+    with _get_engine().connect() as conn:
+        query = text("""
+                SELECT t.ticket_id,
+                       te.thread_id,
+                       te.id as entry_id,
+                       te.staff_id,
+                       te.user_id,
+                       te.type,
+                       te.poster,
+                       te.editor,
+                       te.editor_type,
+                       te.source,
+                       te.format,
+                       te.title   as subject,
+                       te.body    as message,
+                       te.created,
+                       te.updated
+                FROM ost_ticket t
+                         JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
+                         JOIN ost_thread_entry te ON thread_id = th.id
+                WHERE t.ticket_id IN :ticket_ids
+                ORDER BY t.ticket_id ASC, te.id ASC
+                """).bindparams(bindparam("ticket_ids", expanding=True))
+        results = conn.execute(query, {"ticket_ids": ticket_ids}).mappings().all()
+
+        if not results:
+            raise HTTPException(status_code=404, detail="Ticket or Messages not found")
+
+        return [dict(row) for row in results]
+
+
 @app.get("/tickets/{ticket_id}", response_model=TicketItem, dependencies=[Depends(verify_token)], tags=["Tickets"])
 def get_ticket(ticket_id: int):
     """
@@ -553,43 +591,6 @@ def get_ticket(ticket_id: int):
 
         final_item['custom_fields'] = custom_fields_map
         return final_item
-
-
-@app.get("/tickets/{ticket_id}/messages", dependencies=[Depends(verify_token)], tags=["Tickets"],
-         response_model=List[MessagesResponse])
-def list_ticket_messages(ticket_id: int):
-    """
-    Retrieve the messages for a single ticket by its unique ID.
-    Returns a 404 error if the ticket cannot be found.
-    """
-    with _get_engine().connect() as conn:
-        query = """
-                SELECT t.ticket_id,
-                       te.thread_id,
-                       te.id as entry_id,
-                       te.staff_id,
-                       te.user_id,
-                       te.type,
-                       te.poster,
-                       te.editor,
-                       te.editor_type,
-                       te.source,
-                       te.format,
-                       te.title   as subject,
-                       te.body    as message,
-                       te.created,
-                       te.updated
-                FROM ost_ticket t
-                         JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
-                         JOIN ost_thread_entry te ON thread_id = th.id
-                WHERE t.ticket_id = :ticket_id \
-                """
-        results = conn.execute(text(query), {"ticket_id": ticket_id}).mappings().all()
-
-        if not results:
-            raise HTTPException(status_code=404, detail="Ticket or Messages not found")
-
-        return [dict(row) for row in results]
 
 
 @app.get("/tickets/{ticket_id}/attachments", dependencies=[Depends(verify_token)], tags=["Tickets"],

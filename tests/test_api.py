@@ -471,6 +471,8 @@ def test_get_ticket_includes_subject_message_and_closed(client: TestClient, db_c
 
         ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated, closed) VALUES ('CONTENT-1', :uid, 1, NOW(), NOW(), '2026-01-02 03:04:05')"), {"uid": user_id})
         ticket_id = ticket_res.lastrowid
+        second_ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('CONTENT-2', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        second_ticket_id = second_ticket_res.lastrowid
         db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, properties, created, updated) VALUES (1, 'Open', 'open', '{}', NOW(), NOW())"))
 
         thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
@@ -1090,6 +1092,8 @@ def test_list_ticket_messages(client: TestClient, db_conn):
 
         ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated, closed) VALUES ('CONTENT-1', :uid, 1, NOW(), NOW(), '2026-01-02 03:04:05')"), {"uid": user_id})
         ticket_id = ticket_res.lastrowid
+        second_ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('CONTENT-2', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        second_ticket_id = second_ticket_res.lastrowid
         db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, properties, created, updated) VALUES (1, 'Open', 'open', '{}', NOW(), NOW())"))
 
         thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
@@ -1099,21 +1103,24 @@ def test_list_ticket_messages(client: TestClient, db_conn):
         db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, type, title, body, poster, created, updated) VALUES (:thid, 'R', 'A reply', 'Reply text', 'Poster', NOW(), NOW())"), {"thid": thread_id})
         db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, type, title, body, poster, created, updated) VALUES (:thid, 'N', 'A note', 'Note text', 'Poster', NOW(), NOW())"), {"thid": thread_id})
 
+        second_thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": second_ticket_id})
+        db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, type, title, body, poster, created, updated) VALUES (:thid, 'M', 'Second ticket message', 'Second ticket text', 'Poster', NOW(), NOW())"), {"thid": second_thread_res.lastrowid})
+
         api_key = "content-key"
         db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
 
     headers = {"X-API-Key": api_key}
-    response = client.get(f"/tickets/{ticket_id}/messages", headers=headers)
+    response = client.get(f"/tickets/messages?ticket_ids={ticket_id},{second_ticket_id}", headers=headers)
     assert response.status_code == 200
     messages = response.json()
-    assert len(messages) == 3
-    assert {m["subject"] for m in messages} == {"A message", "A reply", "A note"}
-    assert {m["message"] for m in messages} == {"Message text", "Reply text", "Note text"}
+    assert len(messages) == 4
+    assert {m["subject"] for m in messages} == {"A message", "A reply", "A note", "Second ticket message"}
+    assert {m["message"] for m in messages} == {"Message text", "Reply text", "Note text", "Second ticket text"}
 
 def test_list_ticket_messages_not_found(client: TestClient, db_conn):
     with db_conn.begin():
         api_key = "attachment-list-not-found-key"
         db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
 
-    response = client.get("/tickets/99999/messages", headers={"X-API-Key": api_key})
+    response = client.get("/tickets/messages?ticket_ids=99999", headers={"X-API-Key": api_key})
     assert response.status_code == 404
