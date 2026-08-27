@@ -420,9 +420,23 @@ def list_tickets(
         total_records = conn.execute(text(count_sql), params).scalar_one()
 
         data_sql = f"""
-            SELECT t.ticket_id, t.number, t.created, t.status_id, s.name as status_name, 
-                   t.topic_id, ht.topic as topic_name, t.dept_id, d.name as dept_name, t.updated,
-                   t.user_id, u.name as user_name, ue.address as user_email, t.team_id, team.name as team_name
+            SELECT t.ticket_id,
+                   t.number, 
+                   t.created, 
+                   t.status_id, 
+                   s.name as status_name, 
+                   t.topic_id, 
+                   ht.topic as topic_name, 
+                   t.dept_id, 
+                   d.name as dept_name, 
+                   t.updated,
+                   t.user_id, 
+                   u.name as user_name, 
+                   ue.address as user_email, 
+                   t.team_id, 
+                   team.name as team_name,
+                   te.title   as subject,
+                   te.body    as message
             FROM ost_ticket t
             JOIN ost_ticket_status s ON t.status_id = s.id
             JOIN ost_user u ON t.user_id = u.id
@@ -430,6 +444,10 @@ def list_tickets(
             LEFT JOIN ost_help_topic ht ON t.topic_id = ht.topic_id
             LEFT JOIN ost_department d ON t.dept_id = d.id
             LEFT JOIN ost_team team ON t.team_id = team.team_id
+            LEFT JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
+            LEFT JOIN ost_thread_entry te ON te.id = (
+                             SELECT MIN(id) FROM ost_thread_entry WHERE thread_id = th.id
+                         )
             {custom_field_joins}
             {where_clause}
             ORDER BY t.created DESC, t.ticket_id DESC
