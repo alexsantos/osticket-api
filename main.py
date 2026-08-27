@@ -755,14 +755,14 @@ def _generate_ticket_number(conn) -> str:
     return mask
 
 
-@app.post("/tickets/{ticket_id}/attach", dependencies=[Depends(verify_token)], tags=["Tickets"],
+@app.post("/tickets/{ticket_id}/messages/{entry_id}/attach", dependencies=[Depends(verify_token)], tags=["Tickets"],
           response_model=AttachmentResponse)
-async def add_attachment(ticket_id: int, file: UploadFile = File(...)):
+async def add_attachment(ticket_id: int, entry_id: int, file: UploadFile = File(...)):
     """
-    Attach a file to the latest entry in a ticket's thread.
+    Attach a file to an entry in a ticket's thread.
 
     This endpoint uploads a file, creates the necessary records in `ost_file` and
-    `ost_file_chunk`, and links the file as an attachment to the most recent message or note in the ticket's thread.
+    `ost_file_chunk`, and links the file as an attachment to the specified message in the ticket's thread.
     """
     data = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
@@ -772,11 +772,15 @@ async def add_attachment(ticket_id: int, file: UploadFile = File(...)):
 
     try:
         with _get_engine().begin() as conn:
-            eid = conn.execute(text(
-                "SELECT id FROM ost_thread_entry WHERE thread_id = (SELECT id FROM ost_thread WHERE object_id=:tid AND object_type='T') ORDER BY id DESC LIMIT 1"),
-                {"tid": ticket_id}).scalar()
-            if eid is None:
-                raise HTTPException(status_code=404, detail="Ticket not found or has no thread entries.")
+            count_id = conn.execute(text("""
+                                         SELECT count(*)
+                                         FROM ost_thread th
+                                            JOIN ost_thread_entry te ON th.id = te.thread_id
+                                         WHERE th.object_id = :ticket_id
+                                            AND te.id = :entry_id
+                                        """), {"ticket_id": ticket_id, "entry_id": entry_id})
+            if count_id.scalar() == 0:
+                raise HTTPException(status_code=404, detail="Ticket or message not found.")
 
             fid = conn.execute(text("""
                                     INSERT INTO ost_file (ft, type, size, name, `key`, signature, created)
@@ -788,7 +792,7 @@ async def add_attachment(ticket_id: int, file: UploadFile = File(...)):
                          {"fid": fid, "d": data})
 
             conn.execute(text("INSERT INTO ost_attachment (object_id, type, file_id) VALUES (:eid, 'H', :fid)"),
-                         {"eid": eid, "fid": fid})
+                         {"eid": entry_id, "fid": fid})
 
             return {"file_id": fid}
     except HTTPException:

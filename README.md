@@ -283,18 +283,19 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         }'
         ```
 
--   **POST /tickets/{ticket_id}/attach**
-    -   **Description:** Attaches a file to an existing ticket.
+-   **POST /tickets/{ticket_id}/messages/{entry_id}/attach**
+    -   **Description:** Attaches a file to an existing message of an existing ticket.
     -   **Path Parameter:**
         -   `ticket_id`: The ID of the ticket to attach the file to.
+        -   `entry_id`: The ID of the entry to attach the file to.
     -   **Form Data:**
         -   `file`: The file to attach. Maximum size is controlled by `MAX_UPLOAD_MB` (default 10 MB). Files exceeding the limit return `413`.
     -   **Errors:**
-        -   `404` if the ticket does not exist.
+        -   `404` if the ticket or message do not exist.
         -   `413` if the file exceeds the configured size limit.
     -   **Example:**
         ```bash
-        curl -X POST "http://localhost:8080/tickets/123/attach" \
+        curl -X POST "http://localhost:8080/tickets/123/messages/456/attach" \
         -H "X-API-Key: your_osTicket_api_key" \
         -F "file=@/path/to/your/file.txt"
         ```

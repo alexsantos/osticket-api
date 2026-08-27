@@ -540,15 +540,16 @@ def test_add_attachment_to_ticket(client: TestClient, db_conn):
         thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
         thread_id = thread_res.lastrowid
         
-        db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": thread_id})
-        
+        entry_res = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": thread_id})
+        entry_id = entry_res.lastrowid
+
         api_key = "attachment-key"
         db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
 
     headers = {"X-API-Key": api_key}
-    response = client.post(f"/tickets/{ticket_id}/attach", headers=headers, files={"file": ("test.txt", io.BytesIO(b"test"), "text/plain")})
+    response = client.post(f"/tickets/{ticket_id}/messages/{entry_id}/attach", headers=headers, files={"file": ("test.txt", io.BytesIO(b"test"), "text/plain")})
     assert response.status_code == 200
-    response = client.post(f"/tickets/0/attach", headers=headers, files={"file": ("test.txt", io.BytesIO(b"test"), "text/plain")})
+    response = client.post(f"/tickets/0/messages/0/attach", headers=headers, files={"file": ("test.txt", io.BytesIO(b"test"), "text/plain")})
     assert response.status_code == 404
 
 
