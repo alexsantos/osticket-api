@@ -236,6 +236,8 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         ```bash
         curl -X GET "http://localhost:8080/tickets/123" -H "X-API-Key: your_osTicket_api_key"
         ```
+    -   **Errors:**
+        -   `404` if the ticket does not exist.
 
 -   **GET /tickets/messages**
     -   **Description:** Retrieves the messages for a comma-separated list of ticket IDs.
@@ -243,13 +245,17 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         ```bash
         curl -X GET "http://localhost:8080/tickets/messages?ticket_ids=123,456" -H "X-API-Key: your_osTicket_api_key"
         ```
+    -   **Errors:**
+        -   `404` if the tickets do not exist or no messages found.
 
--   **GET /tickets/{ticket_id}/attachments**
-    -   **Description:** Retrieves the attachments for a single ticket by its ID, including file metadata, base64-encoded content, and the message entry they belong to.
+-   **GET /tickets/attachments**
+    -   **Description:** Retrieves the attachments for a comma-separated list of ticket IDs, including file metadata, base64-encoded content, and the message entry they belong to.
     -   **Example:**
         ```bash
-        curl -X GET "http://localhost:8080/tickets/123/attachments" -H "X-API-Key: your_osTicket_api_key"
+        curl -X GET "http://localhost:8080/tickets/attachments?ticket_ids=123,456" -H "X-API-Key: your_osTicket_api_key"
         ```
+    -   **Errors:**
+        -   `404` if the tickets do not exist or no attachments found.
 
 -   **POST /tickets**
     -   **Description:** Creates a new ticket.
