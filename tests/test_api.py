@@ -619,7 +619,8 @@ def test_add_attachment_file_too_large(client: TestClient, db_conn, monkeypatch)
 
         thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
         thread_id = thread_res.lastrowid
-        db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": thread_id})
+        entry_res = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": thread_id})
+        entry_id = entry_res.lastrowid
 
         api_key = "upload-limit-key"
         db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
@@ -630,7 +631,7 @@ def test_add_attachment_file_too_large(client: TestClient, db_conn, monkeypatch)
 
     headers = {"X-API-Key": api_key}
     oversized = io.BytesIO(b"A" * 11)
-    response = client.post(f"/tickets/{ticket_id}/attach", headers=headers, files={"file": ("big.txt", oversized, "text/plain")})
+    response = client.post(f"/tickets/{ticket_id}/messages/{entry_id}/attach", headers=headers, files={"file": ("big.txt", oversized, "text/plain")})
     assert response.status_code == 413
     assert "0 MB" in response.json()["detail"]
 
@@ -649,7 +650,7 @@ def test_add_attachment_db_error(client: TestClient, db_conn, monkeypatch):
     monkeypatch.setattr(main.engine, "begin", mock_begin)
 
     headers = {"X-API-Key": api_key}
-    response = client.post("/tickets/1/attach", headers=headers, files={"file": ("test.txt", io.BytesIO(b"data"), "text/plain")})
+    response = client.post("/tickets/1/messages/1/attach", headers=headers, files={"file": ("test.txt", io.BytesIO(b"data"), "text/plain")})
     assert response.status_code == 500
     assert "attachment" in response.json()["detail"].lower()
 
