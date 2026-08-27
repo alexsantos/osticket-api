@@ -561,25 +561,40 @@ def test_list_ticket_attachments(client: TestClient, db_conn):
 
         ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('ATTACH-1', :uid, 1, NOW(), NOW())"), {"uid": user_id})
         ticket_id = ticket_res.lastrowid
+        second_ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('CONTENT-2', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        second_ticket_id = second_ticket_res.lastrowid
         thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
         thread_id = thread_res.lastrowid
+        second_thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": second_ticket_id})
+        second_thread_id = second_thread_res.lastrowid
         entry_res = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": thread_id})
         entry_id = entry_res.lastrowid
+        second_entry_res = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, type, title, body, poster, created, updated) VALUES (:thid, 'M', 'Second ticket message', 'Second ticket text', 'Poster', NOW(), NOW())"), {"thid": second_thread_res.lastrowid})
+        second_entry_id = second_entry_res.lastrowid
         file_res = db_conn.execute(text("INSERT INTO ost_file (ft, type, size, name, `key`, signature, created) VALUES ('T', 'text/plain', 4, 'test.txt', 'key', 'signature', NOW())"))
         file_id = file_res.lastrowid
+        second_file_res = db_conn.execute(text("INSERT INTO ost_file (ft, type, size, name, `key`, signature, created) VALUES ('T', 'text/plain', 4, 'test2.txt', 'key', 'signature', NOW())"))
+        second_file_id = second_file_res.lastrowid
         db_conn.execute(text("INSERT INTO ost_file_chunk (file_id, chunk_id, filedata) VALUES (:fid, 0, :data)"), {"fid": file_id, "data": b"test"})
         db_conn.execute(text("INSERT INTO ost_attachment (object_id, type, file_id, inline) VALUES (:eid, 'H', :fid, 0)"), {"eid": entry_id, "fid": file_id})
+        db_conn.execute(text("INSERT INTO ost_file_chunk (file_id, chunk_id, filedata) VALUES (:fid, 0, :data)"), {"fid": second_file_id, "data": b"test"})
+        db_conn.execute(text("INSERT INTO ost_attachment (object_id, type, file_id, inline) VALUES (:eid, 'H', :fid, 0)"), {"eid": second_entry_id, "fid": second_file_id})
 
         api_key = "attachment-list-key"
         db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
 
-    response = client.get(f"/tickets/{ticket_id}/attachments", headers={"X-API-Key": api_key})
+    response = client.get(f"/tickets/attachments?ticket_ids={ticket_id},{second_ticket_id}", headers={"X-API-Key": api_key})
     assert response.status_code == 200
     assert response.json()[0]["file_id"] == file_id
     assert response.json()[0]["entry_id"] == entry_id
     assert response.json()[0]["thread_id"] == thread_id
     assert response.json()[0]["name"] == "test.txt"
     assert response.json()[0]["content"] == base64.b64encode(b"test").decode("ascii")
+    assert response.json()[1]["file_id"] == second_file_id
+    assert response.json()[1]["entry_id"] == second_entry_id
+    assert response.json()[1]["thread_id"] == second_thread_id
+    assert response.json()[1]["name"] == "test2.txt"
+    assert response.json()[1]["content"] == base64.b64encode(b"test").decode("ascii")
 
 
 def test_list_ticket_attachments_not_found(client: TestClient, db_conn):
@@ -587,7 +602,7 @@ def test_list_ticket_attachments_not_found(client: TestClient, db_conn):
         api_key = "attachment-list-not-found-key"
         db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
 
-    response = client.get("/tickets/99999/attachments", headers={"X-API-Key": api_key})
+    response = client.get("/tickets/attachments?ticket_ids=99999", headers={"X-API-Key": api_key})
     assert response.status_code == 404
 
 

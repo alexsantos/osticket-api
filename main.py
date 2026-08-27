@@ -521,6 +521,61 @@ def list_ticket_messages(ticket_ids: List[int] = Depends(CommaSeparatedInts("tic
         return [dict(row) for row in results]
 
 
+@app.get("/tickets/attachments", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=List[AttachmentsResponse])
+def list_ticket_attachments(ticket_ids: List[int] = Depends(CommaSeparatedInts("ticket_ids"))):
+    """
+    Retrieve the attachments for a list of tickets by their unique ID.
+    Returns a 404 error if no matching tickets or attachments are found.
+    """
+    with _get_engine().connect() as conn:
+        query = text("""
+                SELECT t.ticket_id,
+                       a.id AS attachment_id,
+                       a.file_id,
+                       th.id AS thread_id,
+                       te.id AS entry_id,
+                       f.name,
+                       f.type,
+                       f.size,
+                       a.inline,
+                       f.created,
+                       fc.chunk_id,
+                       fc.filedata
+                FROM ost_ticket t
+                         JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
+                         JOIN ost_thread_entry te ON te.thread_id = th.id
+                         JOIN ost_attachment a ON a.object_id = te.id AND a.type = 'H'
+                         JOIN ost_file f ON f.id = a.file_id
+                         LEFT JOIN ost_file_chunk fc ON fc.file_id = f.id
+                WHERE t.ticket_id IN :ticket_ids
+                ORDER BY f.created ASC, a.id ASC, fc.chunk_id ASC
+                """).bindparams(bindparam("ticket_ids", expanding=True))
+        results = conn.execute(query, {"ticket_ids": ticket_ids}).mappings().all()
+
+        if not results:
+            raise HTTPException(status_code=404, detail="Ticket or Attachments not found")
+
+        attachments = {}
+        chunks = {}
+        for row in results:
+            attachment_id = row["attachment_id"]
+            if attachment_id not in attachments:
+                attachment = dict(row)
+                attachment.pop("chunk_id", None)
+                attachment.pop("filedata", None)
+                attachments[attachment_id] = attachment
+                chunks[attachment_id] = []
+            if row["filedata"] is not None:
+                chunks[attachment_id].append(row["filedata"])
+
+        response = []
+        for attachment_id, attachment in attachments.items():
+            attachment["content"] = base64.b64encode(b"".join(chunks[attachment_id])).decode("ascii")
+            response.append(attachment)
+        return response
+
+
 @app.get("/tickets/{ticket_id}", response_model=TicketItem, dependencies=[Depends(verify_token)], tags=["Tickets"])
 def get_ticket(ticket_id: int):
     """
@@ -591,58 +646,6 @@ def get_ticket(ticket_id: int):
 
         final_item['custom_fields'] = custom_fields_map
         return final_item
-
-
-@app.get("/tickets/{ticket_id}/attachments", dependencies=[Depends(verify_token)], tags=["Tickets"],
-         response_model=List[AttachmentsResponse])
-def list_ticket_attachments(ticket_id: int):
-    """Retrieve the attachments for a single ticket by its unique ID."""
-    with _get_engine().connect() as conn:
-        query = """
-                SELECT t.ticket_id,
-                       a.id AS attachment_id,
-                       a.file_id,
-                       th.id AS thread_id,
-                       te.id AS entry_id,
-                       f.name,
-                       f.type,
-                       f.size,
-                       a.inline,
-                       f.created,
-                       fc.chunk_id,
-                       fc.filedata
-                FROM ost_ticket t
-                         JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
-                         JOIN ost_thread_entry te ON te.thread_id = th.id
-                         JOIN ost_attachment a ON a.object_id = te.id AND a.type = 'H'
-                         JOIN ost_file f ON f.id = a.file_id
-                         LEFT JOIN ost_file_chunk fc ON fc.file_id = f.id
-                WHERE t.ticket_id = :ticket_id
-                ORDER BY f.created ASC, a.id ASC, fc.chunk_id ASC
-                """
-        results = conn.execute(text(query), {"ticket_id": ticket_id}).mappings().all()
-
-        if not results:
-            raise HTTPException(status_code=404, detail="Ticket or Attachments not found")
-
-        attachments = {}
-        chunks = {}
-        for row in results:
-            attachment_id = row["attachment_id"]
-            if attachment_id not in attachments:
-                attachment = dict(row)
-                attachment.pop("chunk_id", None)
-                attachment.pop("filedata", None)
-                attachments[attachment_id] = attachment
-                chunks[attachment_id] = []
-            if row["filedata"] is not None:
-                chunks[attachment_id].append(row["filedata"])
-
-        response = []
-        for attachment_id, attachment in attachments.items():
-            attachment["content"] = base64.b64encode(b"".join(chunks[attachment_id])).decode("ascii")
-            response.append(attachment)
-        return response
 
 
 @app.post("/tickets", dependencies=[Depends(verify_token)], tags=["Tickets"], response_model=TicketCreateResponse)
