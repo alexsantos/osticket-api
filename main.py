@@ -973,8 +973,8 @@ def add_message_deprecated(ticket_id: int, message: MessageCreate):
     return add_message(ticket_id, message)
 
 
-@app.put("/tickets/{ticket_id}/status", dependencies=[Depends(verify_token)], tags=["Tickets"],
-         response_model=UpdateResponse)
+@app.patch("/tickets/{ticket_id}/status", dependencies=[Depends(verify_token)], tags=["Tickets"],
+           response_model=UpdateResponse)
 def update_ticket_status(ticket_id: int, payload: StatusUpdateRequest):
     """Update a ticket's status."""
     with _get_engine().begin() as conn:
@@ -987,8 +987,15 @@ def update_ticket_status(ticket_id: int, payload: StatusUpdateRequest):
         return {"status": "updated"}
 
 
-@app.put("/tickets/{ticket_id}/department", dependencies=[Depends(verify_token)], tags=["Tickets"],
-         response_model=UpdateResponse)
+@app.put("/tickets/{ticket_id}/status", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=UpdateResponse, deprecated=True)
+def update_ticket_status_put_deprecated(ticket_id: int, payload: StatusUpdateRequest):
+    """Deprecated: use `PATCH /tickets/{ticket_id}/status` instead."""
+    return update_ticket_status(ticket_id, payload)
+
+
+@app.patch("/tickets/{ticket_id}/department", dependencies=[Depends(verify_token)], tags=["Tickets"],
+           response_model=UpdateResponse)
 def update_ticket_department(ticket_id: int, payload: DepartmentUpdateRequest):
     """Update the department assigned to a ticket."""
     with _get_engine().begin() as conn:
@@ -1001,8 +1008,15 @@ def update_ticket_department(ticket_id: int, payload: DepartmentUpdateRequest):
         return {"status": "updated"}
 
 
-@app.put("/tickets/{ticket_id}/team", dependencies=[Depends(verify_token)], tags=["Tickets"],
-         response_model=UpdateResponse)
+@app.put("/tickets/{ticket_id}/department", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=UpdateResponse, deprecated=True)
+def update_ticket_department_put_deprecated(ticket_id: int, payload: DepartmentUpdateRequest):
+    """Deprecated: use `PATCH /tickets/{ticket_id}/department` instead."""
+    return update_ticket_department(ticket_id, payload)
+
+
+@app.patch("/tickets/{ticket_id}/team", dependencies=[Depends(verify_token)], tags=["Tickets"],
+           response_model=UpdateResponse)
 def update_ticket_team(ticket_id: int, payload: TeamUpdateRequest):
     """Update the team assigned to a ticket."""
     with _get_engine().begin() as conn:
@@ -1013,6 +1027,13 @@ def update_ticket_team(ticket_id: int, payload: TeamUpdateRequest):
         if result.rowcount == 0:
             raise HTTPException(status_code=404, detail="Ticket not found.")
         return {"status": "updated"}
+
+
+@app.put("/tickets/{ticket_id}/team", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=UpdateResponse, deprecated=True)
+def update_ticket_team_put_deprecated(ticket_id: int, payload: TeamUpdateRequest):
+    """Deprecated: use `PATCH /tickets/{ticket_id}/team` instead."""
+    return update_ticket_team(ticket_id, payload)
 
 
 def _apply_message_entry_update(conn, ticket_id: int, entry_id: int, payload: MessageUpdateRequest):
@@ -1035,8 +1056,8 @@ def _apply_message_entry_update(conn, ticket_id: int, entry_id: int, payload: Me
     )
 
 
-@app.put("/tickets/{ticket_id}/messages/{entry_id}", dependencies=[Depends(verify_token)], tags=["Tickets"],
-         response_model=UpdateResponse)
+@app.patch("/tickets/{ticket_id}/messages/{entry_id}", dependencies=[Depends(verify_token)], tags=["Tickets"],
+           response_model=UpdateResponse)
 def update_ticket_message_entry(ticket_id: int, entry_id: int, payload: MessageUpdateRequest):
     """Update a specific message entry on a ticket's thread."""
     if payload.title is None and payload.body is None:
@@ -1059,11 +1080,18 @@ def update_ticket_message_entry(ticket_id: int, entry_id: int, payload: MessageU
         return {"status": "updated"}
 
 
+@app.put("/tickets/{ticket_id}/messages/{entry_id}", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=UpdateResponse, deprecated=True)
+def update_ticket_message_entry_put_deprecated(ticket_id: int, entry_id: int, payload: MessageUpdateRequest):
+    """Deprecated: use `PATCH /tickets/{ticket_id}/messages/{entry_id}` instead."""
+    return update_ticket_message_entry(ticket_id, entry_id, payload)
+
+
 @app.put("/tickets/{ticket_id}/message", dependencies=[Depends(verify_token)], tags=["Tickets"],
          response_model=UpdateResponse, deprecated=True)
 def update_ticket_message(ticket_id: int, payload: MessageUpdateRequest):
     """
-    Deprecated: use `PUT /tickets/{ticket_id}/messages/{entry_id}` instead.
+    Deprecated: use `PATCH /tickets/{ticket_id}/messages/{entry_id}` instead.
 
     Update the latest message entry on a ticket thread.
     """
@@ -1089,8 +1117,8 @@ def update_ticket_message(ticket_id: int, payload: MessageUpdateRequest):
         return {"status": "updated"}
 
 
-@app.put("/tickets/{ticket_id}/attachments/{file_id}", dependencies=[Depends(verify_token)], tags=["Tickets"],
-         response_model=UpdateResponse)
+@app.patch("/tickets/{ticket_id}/attachments/{file_id}", dependencies=[Depends(verify_token)], tags=["Tickets"],
+           response_model=UpdateResponse)
 async def update_ticket_attachment(ticket_id: int, file_id: int, file: UploadFile = File(...)):
     """Replace the contents of an existing attachment on a ticket."""
     data = await file.read(MAX_UPLOAD_BYTES + 1)
@@ -1149,14 +1177,21 @@ async def update_ticket_attachment(ticket_id: int, file_id: int, file: UploadFil
         raise HTTPException(status_code=500, detail="An internal error occurred while updating the attachment.") from e
 
 
-@app.put("/tickets/{ticket_id}/attachment/{file_id}", dependencies=[Depends(verify_token)], tags=["Tickets"],
+@app.put("/tickets/{ticket_id}/attachments/{file_id}", dependencies=[Depends(verify_token)], tags=["Tickets"],
          response_model=UpdateResponse, deprecated=True)
-async def update_ticket_attachment_deprecated(ticket_id: int, file_id: int, file: UploadFile = File(...)):
-    """Deprecated: use `PUT /tickets/{ticket_id}/attachments/{file_id}` instead."""
+async def update_ticket_attachment_put_deprecated(ticket_id: int, file_id: int, file: UploadFile = File(...)):
+    """Deprecated: use `PATCH /tickets/{ticket_id}/attachments/{file_id}` instead."""
     return await update_ticket_attachment(ticket_id, file_id, file)
 
 
-@app.put("/tickets/{ticket_id}/close", dependencies=[Depends(verify_token)], tags=["Tickets"],
+@app.put("/tickets/{ticket_id}/attachment/{file_id}", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=UpdateResponse, deprecated=True)
+async def update_ticket_attachment_deprecated(ticket_id: int, file_id: int, file: UploadFile = File(...)):
+    """Deprecated: use `PATCH /tickets/{ticket_id}/attachments/{file_id}` instead."""
+    return await update_ticket_attachment(ticket_id, file_id, file)
+
+
+@app.put("/tickets/{ticket_id}/closed", dependencies=[Depends(verify_token)], tags=["Tickets"],
          response_model=CloseResponse)
 def close_ticket(ticket_id: int):
     """
@@ -1176,6 +1211,13 @@ def close_ticket(ticket_id: int):
             raise HTTPException(status_code=404, detail="Ticket not found.")
 
         return {"status": "closed"}
+
+
+@app.put("/tickets/{ticket_id}/close", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=CloseResponse, deprecated=True)
+def close_ticket_deprecated(ticket_id: int):
+    """Deprecated: use `PUT /tickets/{ticket_id}/closed` instead."""
+    return close_ticket(ticket_id)
 
 
 @app.get("/", include_in_schema=False)
