@@ -156,7 +156,7 @@ class AttachmentsResponse(BaseModel):
     size: int
     inline: int
     created: datetime
-    content: str
+    content: Optional[str] = None
 
 
 class NoteResponse(BaseModel):
