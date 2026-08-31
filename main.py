@@ -156,7 +156,7 @@ async def verify_token(x_api_key: str = Header(...)):
             raise HTTPException(status_code=403, detail="API Key is not active")
 
 app = FastAPI(
-    title="osTicket Ultimate Python API", version="0.10.1", lifespan=lifespan
+    title="osTicket Ultimate Python API", version="0.10.2", lifespan=lifespan
 )
 
 
@@ -527,9 +527,9 @@ def _query_ticket_messages(conn, ticket_ids: List[int]):
     return conn.execute(query, {"ticket_ids": ticket_ids}).mappings().all()
 
 
-@app.get("/tickets/messages", dependencies=[Depends(verify_token)], tags=["Tickets"],
+@app.get("/messages", dependencies=[Depends(verify_token)], tags=["Messages"],
          response_model=List[MessagesResponse])
-def list_ticket_messages(ticket_ids: List[int] = Depends(CommaSeparatedInts("ticket_ids"))):
+def list_messages(ticket_ids: List[int] = Depends(CommaSeparatedInts("ticket_ids"))):
     """
     Retrieve the messages for a list of tickets by their unique IDs.
     Returns a 404 error if no matching tickets or messages are found.
@@ -544,6 +544,18 @@ def list_ticket_messages(ticket_ids: List[int] = Depends(CommaSeparatedInts("tic
             raise HTTPException(status_code=404, detail="Ticket or Messages not found")
 
         return [dict(row) for row in results]
+
+
+@app.get("/tickets/messages", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=List[MessagesResponse], deprecated=True)
+def list_ticket_messages(ticket_ids: List[int] = Depends(CommaSeparatedInts("ticket_ids"))):
+    """
+    Deprecated: use `GET /messages?ticket_ids=...` instead.
+
+    Retrieve the messages for a list of tickets by their unique IDs.
+    Returns a 404 error if no matching tickets or messages are found.
+    """
+    return list_messages(ticket_ids)
 
 
 @app.get("/tickets/{ticket_id}/messages", dependencies=[Depends(verify_token)], tags=["Tickets"],
@@ -607,9 +619,9 @@ def _query_ticket_attachments(conn, ticket_ids: List[int]):
     return response
 
 
-@app.get("/tickets/attachments", dependencies=[Depends(verify_token)], tags=["Tickets"],
+@app.get("/attachments", dependencies=[Depends(verify_token)], tags=["Attachments"],
          response_model=List[AttachmentsResponse])
-def list_ticket_attachments(ticket_ids: List[int] = Depends(CommaSeparatedInts("ticket_ids"))):
+def list_attachments(ticket_ids: List[int] = Depends(CommaSeparatedInts("ticket_ids"))):
     """
     Retrieve the attachments for a list of tickets by their unique ID.
     Returns a 404 error if no matching tickets or attachments are found.
@@ -624,6 +636,18 @@ def list_ticket_attachments(ticket_ids: List[int] = Depends(CommaSeparatedInts("
             raise HTTPException(status_code=404, detail="Ticket or Attachments not found")
 
         return response
+
+
+@app.get("/tickets/attachments", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=List[AttachmentsResponse], deprecated=True)
+def list_ticket_attachments(ticket_ids: List[int] = Depends(CommaSeparatedInts("ticket_ids"))):
+    """
+    Deprecated: use `GET /attachments?ticket_ids=...` instead.
+
+    Retrieve the attachments for a list of tickets by their unique ID.
+    Returns a 404 error if no matching tickets or attachments are found.
+    """
+    return list_attachments(ticket_ids)
 
 
 @app.get("/tickets/{ticket_id}/attachments", dependencies=[Depends(verify_token)], tags=["Tickets"],

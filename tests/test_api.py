@@ -679,6 +679,54 @@ def test_list_ticket_attachments_missing_ticket_ids(client: TestClient, db_conn)
     assert response.status_code == 422
 
 
+def test_list_attachments(client: TestClient, db_conn):
+    with db_conn.begin():
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Top Level Attachment User', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'top-level-attachment@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('TOP-ATTACH-1', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+        thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
+        thread_id = thread_res.lastrowid
+        entry_res = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": thread_id})
+        entry_id = entry_res.lastrowid
+        file_res = db_conn.execute(text("INSERT INTO ost_file (ft, type, size, name, `key`, signature, created) VALUES ('T', 'text/plain', 4, 'test.txt', 'key', 'signature', NOW())"))
+        file_id = file_res.lastrowid
+        db_conn.execute(text("INSERT INTO ost_file_chunk (file_id, chunk_id, filedata) VALUES (:fid, 0, :data)"), {"fid": file_id, "data": b"test"})
+        db_conn.execute(text("INSERT INTO ost_attachment (object_id, type, file_id, inline) VALUES (:eid, 'H', :fid, 0)"), {"eid": entry_id, "fid": file_id})
+
+        api_key = "top-level-attachment-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    response = client.get(f"/attachments?ticket_ids={ticket_id}", headers={"X-API-Key": api_key})
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    assert response.json()[0]["file_id"] == file_id
+    assert response.json()[0]["entry_id"] == entry_id
+    assert response.json()[0]["thread_id"] == thread_id
+    assert response.json()[0]["content"] == base64.b64encode(b"test").decode("ascii")
+
+
+def test_list_attachments_not_found(client: TestClient, db_conn):
+    with db_conn.begin():
+        api_key = "top-level-attachment-not-found-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    response = client.get("/attachments?ticket_ids=99999", headers={"X-API-Key": api_key})
+    assert response.status_code == 404
+
+
+def test_list_attachments_missing_ticket_ids(client: TestClient, db_conn):
+    with db_conn.begin():
+        api_key = "top-level-attachment-missing-ids-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    response = client.get("/attachments", headers={"X-API-Key": api_key})
+    assert response.status_code == 422
+
+
 def test_add_attachment_file_too_large(client: TestClient, db_conn, monkeypatch):
     with db_conn.begin():
         user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Upload Limit User', NOW(), NOW(), 0)"))
@@ -1255,4 +1303,45 @@ def test_list_ticket_messages_missing_ticket_ids(client: TestClient, db_conn):
         db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
 
     response = client.get("/tickets/messages", headers={"X-API-Key": api_key})
+    assert response.status_code == 422
+
+
+def test_list_messages(client: TestClient, db_conn):
+    with db_conn.begin():
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Top Level Content User', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'top-level-content@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('TOP-CONTENT-1', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+        thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
+        thread_id = thread_res.lastrowid
+        db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, type, title, body, poster, created, updated) VALUES (:thid, 'M', 'A message', 'Message text', 'Poster', NOW(), NOW())"), {"thid": thread_id})
+
+        api_key = "top-level-content-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    response = client.get(f"/messages?ticket_ids={ticket_id}", headers={"X-API-Key": api_key})
+    assert response.status_code == 200
+    messages = response.json()
+    assert len(messages) == 1
+    assert messages[0]["subject"] == "A message"
+
+
+def test_list_messages_not_found(client: TestClient, db_conn):
+    with db_conn.begin():
+        api_key = "top-level-content-not-found-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    response = client.get("/messages?ticket_ids=99999", headers={"X-API-Key": api_key})
+    assert response.status_code == 404
+
+
+def test_list_messages_missing_ticket_ids(client: TestClient, db_conn):
+    with db_conn.begin():
+        api_key = "top-level-content-missing-ids-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    response = client.get("/messages", headers={"X-API-Key": api_key})
     assert response.status_code == 422
