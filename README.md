@@ -249,7 +249,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -   `404` if the ticket does not exist or has no messages.
 
 -   **GET /tickets/{ticket_id}/attachments**
-    -   **Description:** Retrieves the attachments for a single ticket by its ID, including file metadata, base64-encoded content, and the message entry they belong to.
+    -   **Description:** Retrieves the attachments for a single ticket by its ID, including file metadata, base64-encoded content, and the message entry they belong to. `content` is `null` when the file's bytes live in a non-database storage backend (e.g. filesystem) that this API cannot read - check `size` for the actual file size in that case.
     -   **Example:**
         ```bash
         curl -X GET "http://localhost:8080/tickets/123/attachments" -H "X-API-Key: your_osTicket_api_key"
@@ -282,7 +282,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
 ### Attachments
 
 -   **GET /attachments**
-    -   **Description:** Retrieves the attachments for a comma-separated list of ticket IDs, including file metadata, base64-encoded content, and the message entry they belong to.
+    -   **Description:** Retrieves the attachments for a comma-separated list of ticket IDs, including file metadata, base64-encoded content, and the message entry they belong to. `content` is `null` when the file's bytes live in a non-database storage backend (e.g. filesystem) that this API cannot read - check `size` for the actual file size in that case.
     -   **Example:**
         ```bash
         curl -X GET "http://localhost:8080/attachments?ticket_ids=123,456" -H "X-API-Key: your_osTicket_api_key"

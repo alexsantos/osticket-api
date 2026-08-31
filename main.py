@@ -614,7 +614,13 @@ def _query_ticket_attachments(conn, ticket_ids: List[int]):
 
     response = []
     for attachment_id, attachment in attachments.items():
-        attachment["content"] = base64.b64encode(b"".join(chunks[attachment_id])).decode("ascii")
+        # No rows in ost_file_chunk means the file's bytes live in a non-database
+        # storage backend (see ost_file.bk) that this API cannot read - distinct
+        # from a genuinely empty file, so leave content unset rather than "".
+        attachment["content"] = (
+            base64.b64encode(b"".join(chunks[attachment_id])).decode("ascii")
+            if chunks[attachment_id] else None
+        )
         response.append(attachment)
     return response
 
