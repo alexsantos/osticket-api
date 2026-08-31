@@ -403,7 +403,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
 -   **POST /tickets/{ticket_id}/message** *(deprecated - use `POST /tickets/{ticket_id}/messages` instead)*
     -   **Description:** Same as above, kept for backward compatibility.
 
--   **PUT /tickets/{ticket_id}/status**
+-   **PATCH /tickets/{ticket_id}/status**
     -   **Description:** Updates a ticket's status.
     -   **Path Parameter:**
         -   `ticket_id`: The ID of the ticket to update.
@@ -411,14 +411,17 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -   `404` if the ticket does not exist.
     -   **Example:**
         ```bash
-        curl -X PUT "http://localhost:8080/tickets/123/status" \
+        curl -X PATCH "http://localhost:8080/tickets/123/status" \
         -H "X-API-Key: your_osTicket_api_key" \
         -d '{
           "status_id": 1
         }'
         ```
 
--   **PUT /tickets/{ticket_id}/department**
+-   **PUT /tickets/{ticket_id}/status** *(deprecated - use `PATCH /tickets/{ticket_id}/status` instead)*
+    -   **Description:** Same as above, kept for backward compatibility. `PATCH` is the semantically correct verb for a partial update; `PUT` implies replacing the entire resource.
+
+-   **PATCH /tickets/{ticket_id}/department**
     -   **Description:** Updates a ticket's department.
     -   **Path Parameter:**
         -   `ticket_id`: The ID of the ticket to update.
@@ -426,14 +429,17 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -   `404` if the ticket does not exist.
     -   **Example:**
         ```bash
-        curl -X PUT "http://localhost:8080/tickets/123/department" \
+        curl -X PATCH "http://localhost:8080/tickets/123/department" \
         -H "X-API-Key: your_osTicket_api_key" \
         -d '{
           "dept_id": 1
         }'
         ```
 
--   **PUT /tickets/{ticket_id}/team**
+-   **PUT /tickets/{ticket_id}/department** *(deprecated - use `PATCH /tickets/{ticket_id}/department` instead)*
+    -   **Description:** Same as above, kept for backward compatibility.
+
+-   **PATCH /tickets/{ticket_id}/team**
     -   **Description:** Updates a ticket's team.
     -   **Path Parameter:**
         -   `ticket_id`: The ID of the ticket to update.
@@ -441,14 +447,17 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -   `404` if the ticket does not exist.
     -   **Example:**
         ```bash
-        curl -X PUT "http://localhost:8080/tickets/123/team" \
+        curl -X PATCH "http://localhost:8080/tickets/123/team" \
         -H "X-API-Key: your_osTicket_api_key" \
         -d '{
           "team_id": 1
         }'
         ```
 
--   **PUT /tickets/{ticket_id}/messages/{entry_id}**
+-   **PUT /tickets/{ticket_id}/team** *(deprecated - use `PATCH /tickets/{ticket_id}/team` instead)*
+    -   **Description:** Same as above, kept for backward compatibility.
+
+-   **PATCH /tickets/{ticket_id}/messages/{entry_id}**
     -   **Description:** Updates a specific message entry on a ticket's thread.
     -   **Path Parameter:**
         -   `ticket_id`: The ID of the ticket to update.
@@ -458,7 +467,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -   `404` if the ticket or message entry does not exist.
     -   **Example:**
         ```bash
-        curl -X PUT "http://localhost:8080/tickets/123/messages/456" \
+        curl -X PATCH "http://localhost:8080/tickets/123/messages/456" \
         -H "X-API-Key: your_osTicket_api_key" \
         -d '{
           "title": "Test Message",
@@ -466,7 +475,10 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         }'
         ```
 
--   **PUT /tickets/{ticket_id}/message** *(deprecated - use `PUT /tickets/{ticket_id}/messages/{entry_id}` instead)*
+-   **PUT /tickets/{ticket_id}/messages/{entry_id}** *(deprecated - use `PATCH /tickets/{ticket_id}/messages/{entry_id}` instead)*
+    -   **Description:** Same as above, kept for backward compatibility.
+
+-   **PUT /tickets/{ticket_id}/message** *(deprecated - use `PATCH /tickets/{ticket_id}/messages/{entry_id}` instead)*
     -   **Description:** Updates the latest message entry on a ticket thread, instead of a specifically addressed one. Kept for backward compatibility.
     -   **Path Parameter:**
         -   `ticket_id`: The ID of the ticket to update.
@@ -482,7 +494,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         }'
         ```
 
--   **PUT /tickets/{ticket_id}/attachments/{file_id}**
+-   **PATCH /tickets/{ticket_id}/attachments/{file_id}**
     -   **Description:** Replaces the contents of an existing attachment on a ticket.
     -   **Path Parameter:**
         -   `ticket_id`: The ID of the ticket to update.
@@ -494,15 +506,18 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -   `413` if the file exceeds the configured size limit.
     -   **Example:**
         ```bash
-        curl -X PUT "http://localhost:8080/tickets/123/attachments/1" \
+        curl -X PATCH "http://localhost:8080/tickets/123/attachments/1" \
         -H "X-API-Key: your_osTicket_api_key" \
         -F "file=@/path/to/your/file.txt"
         ```
 
--   **PUT /tickets/{ticket_id}/attachment/{file_id}** *(deprecated - use `PUT /tickets/{ticket_id}/attachments/{file_id}` instead)*
+-   **PUT /tickets/{ticket_id}/attachments/{file_id}** *(deprecated - use `PATCH /tickets/{ticket_id}/attachments/{file_id}` instead)*
     -   **Description:** Same as above, kept for backward compatibility.
 
--   **PUT /tickets/{ticket_id}/close**
+-   **PUT /tickets/{ticket_id}/attachment/{file_id}** *(deprecated - use `PATCH /tickets/{ticket_id}/attachments/{file_id}` instead)*
+    -   **Description:** Same as above, kept for backward compatibility.
+
+-   **PUT /tickets/{ticket_id}/closed**
     -   **Description:** Closes a ticket by setting its status to the configured "closed" state in osTicket.
     -   **Path Parameter:**
         -   `ticket_id`: The ID of the ticket to close.
@@ -510,5 +525,8 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -   `404` if the ticket does not exist.
     -   **Example:**
         ```bash
-        curl -X PUT "http://localhost:8080/tickets/123/close" -H "X-API-Key: your_osTicket_api_key"
+        curl -X PUT "http://localhost:8080/tickets/123/closed" -H "X-API-Key: your_osTicket_api_key"
         ```
+
+-   **PUT /tickets/{ticket_id}/close** *(deprecated - use `PUT /tickets/{ticket_id}/closed` instead)*
+    -   **Description:** Same as above, kept for backward compatibility. `close` is a verb baked into the URL; `closed` names the resulting state instead, the same pattern used e.g. by GitHub's `starred` endpoint.
