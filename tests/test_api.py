@@ -553,6 +553,30 @@ def test_add_attachment_to_ticket(client: TestClient, db_conn):
     assert response.status_code == 404
 
 
+def test_add_attachment_rejects_entry_from_other_object_type(client: TestClient, db_conn):
+    with db_conn.begin():
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Attachment User', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'attachment2@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('2', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+
+        # A thread for a different object type that happens to share the same object_id as the ticket.
+        other_thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'A', NOW())"), {"tid": ticket_id})
+        other_thread_id = other_thread_res.lastrowid
+        other_entry_res = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": other_thread_id})
+        other_entry_id = other_entry_res.lastrowid
+
+        api_key = "attachment-cross-type-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    headers = {"X-API-Key": api_key}
+    response = client.post(f"/tickets/{ticket_id}/messages/{other_entry_id}/attach", headers=headers, files={"file": ("test.txt", io.BytesIO(b"test"), "text/plain")})
+    assert response.status_code == 404
+
+
 def test_list_ticket_attachments(client: TestClient, db_conn):
     with db_conn.begin():
         user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Attachment List User', NOW(), NOW(), 0)"))

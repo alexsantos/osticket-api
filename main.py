@@ -777,6 +777,7 @@ async def add_attachment(ticket_id: int, entry_id: int, file: UploadFile = File(
                                          FROM ost_thread th
                                             JOIN ost_thread_entry te ON th.id = te.thread_id
                                          WHERE th.object_id = :ticket_id
+                                            AND th.object_type = 'T'
                                             AND te.id = :entry_id
                                         """), {"ticket_id": ticket_id, "entry_id": entry_id})
             if count_id.scalar() == 0:
