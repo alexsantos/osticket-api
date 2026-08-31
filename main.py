@@ -501,6 +501,32 @@ def list_tickets(
         }
 
 
+def _query_ticket_messages(conn, ticket_ids: List[int]):
+    query = text("""
+            SELECT t.ticket_id,
+                   te.thread_id,
+                   te.id as entry_id,
+                   te.staff_id,
+                   te.user_id,
+                   te.type,
+                   te.poster,
+                   te.editor,
+                   te.editor_type,
+                   te.source,
+                   te.format,
+                   te.title   as subject,
+                   te.body    as message,
+                   te.created,
+                   te.updated
+            FROM ost_ticket t
+                     JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
+                     JOIN ost_thread_entry te ON thread_id = th.id
+            WHERE t.ticket_id IN :ticket_ids
+            ORDER BY t.ticket_id ASC, te.id ASC
+            """).bindparams(bindparam("ticket_ids", expanding=True))
+    return conn.execute(query, {"ticket_ids": ticket_ids}).mappings().all()
+
+
 @app.get("/tickets/messages", dependencies=[Depends(verify_token)], tags=["Tickets"],
          response_model=List[MessagesResponse])
 def list_ticket_messages(ticket_ids: List[int] = Depends(CommaSeparatedInts("ticket_ids"))):
@@ -512,34 +538,73 @@ def list_ticket_messages(ticket_ids: List[int] = Depends(CommaSeparatedInts("tic
         raise HTTPException(status_code=422, detail="Query parameter 'ticket_ids' is required")
 
     with _get_engine().connect() as conn:
-        query = text("""
-                SELECT t.ticket_id,
-                       te.thread_id,
-                       te.id as entry_id,
-                       te.staff_id,
-                       te.user_id,
-                       te.type,
-                       te.poster,
-                       te.editor,
-                       te.editor_type,
-                       te.source,
-                       te.format,
-                       te.title   as subject,
-                       te.body    as message,
-                       te.created,
-                       te.updated
-                FROM ost_ticket t
-                         JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
-                         JOIN ost_thread_entry te ON thread_id = th.id
-                WHERE t.ticket_id IN :ticket_ids
-                ORDER BY t.ticket_id ASC, te.id ASC
-                """).bindparams(bindparam("ticket_ids", expanding=True))
-        results = conn.execute(query, {"ticket_ids": ticket_ids}).mappings().all()
+        results = _query_ticket_messages(conn, ticket_ids)
 
         if not results:
             raise HTTPException(status_code=404, detail="Ticket or Messages not found")
 
         return [dict(row) for row in results]
+
+
+@app.get("/tickets/{ticket_id}/messages", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=List[MessagesResponse])
+def get_ticket_messages(ticket_id: int):
+    """
+    Retrieve the messages for a single ticket by its unique ID.
+    Returns a 404 error if the ticket cannot be found or has no messages.
+    """
+    with _get_engine().connect() as conn:
+        results = _query_ticket_messages(conn, [ticket_id])
+
+        if not results:
+            raise HTTPException(status_code=404, detail="Ticket or Messages not found")
+
+        return [dict(row) for row in results]
+
+
+def _query_ticket_attachments(conn, ticket_ids: List[int]):
+    query = text("""
+            SELECT t.ticket_id,
+                   a.id AS attachment_id,
+                   a.file_id,
+                   th.id AS thread_id,
+                   te.id AS entry_id,
+                   f.name,
+                   f.type,
+                   f.size,
+                   a.inline,
+                   f.created,
+                   fc.chunk_id,
+                   fc.filedata
+            FROM ost_ticket t
+                     JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
+                     JOIN ost_thread_entry te ON te.thread_id = th.id
+                     JOIN ost_attachment a ON a.object_id = te.id AND a.type = 'H'
+                     JOIN ost_file f ON f.id = a.file_id
+                     LEFT JOIN ost_file_chunk fc ON fc.file_id = f.id
+            WHERE t.ticket_id IN :ticket_ids
+            ORDER BY f.created ASC, a.id ASC, fc.chunk_id ASC
+            """).bindparams(bindparam("ticket_ids", expanding=True))
+    results = conn.execute(query, {"ticket_ids": ticket_ids}).mappings().all()
+
+    attachments = {}
+    chunks = {}
+    for row in results:
+        attachment_id = row["attachment_id"]
+        if attachment_id not in attachments:
+            attachment = dict(row)
+            attachment.pop("chunk_id", None)
+            attachment.pop("filedata", None)
+            attachments[attachment_id] = attachment
+            chunks[attachment_id] = []
+        if row["filedata"] is not None:
+            chunks[attachment_id].append(row["filedata"])
+
+    response = []
+    for attachment_id, attachment in attachments.items():
+        attachment["content"] = base64.b64encode(b"".join(chunks[attachment_id])).decode("ascii")
+        response.append(attachment)
+    return response
 
 
 @app.get("/tickets/attachments", dependencies=[Depends(verify_token)], tags=["Tickets"],
@@ -553,50 +618,27 @@ def list_ticket_attachments(ticket_ids: List[int] = Depends(CommaSeparatedInts("
         raise HTTPException(status_code=422, detail="Query parameter 'ticket_ids' is required")
 
     with _get_engine().connect() as conn:
-        query = text("""
-                SELECT t.ticket_id,
-                       a.id AS attachment_id,
-                       a.file_id,
-                       th.id AS thread_id,
-                       te.id AS entry_id,
-                       f.name,
-                       f.type,
-                       f.size,
-                       a.inline,
-                       f.created,
-                       fc.chunk_id,
-                       fc.filedata
-                FROM ost_ticket t
-                         JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
-                         JOIN ost_thread_entry te ON te.thread_id = th.id
-                         JOIN ost_attachment a ON a.object_id = te.id AND a.type = 'H'
-                         JOIN ost_file f ON f.id = a.file_id
-                         LEFT JOIN ost_file_chunk fc ON fc.file_id = f.id
-                WHERE t.ticket_id IN :ticket_ids
-                ORDER BY f.created ASC, a.id ASC, fc.chunk_id ASC
-                """).bindparams(bindparam("ticket_ids", expanding=True))
-        results = conn.execute(query, {"ticket_ids": ticket_ids}).mappings().all()
+        response = _query_ticket_attachments(conn, ticket_ids)
 
-        if not results:
+        if not response:
             raise HTTPException(status_code=404, detail="Ticket or Attachments not found")
 
-        attachments = {}
-        chunks = {}
-        for row in results:
-            attachment_id = row["attachment_id"]
-            if attachment_id not in attachments:
-                attachment = dict(row)
-                attachment.pop("chunk_id", None)
-                attachment.pop("filedata", None)
-                attachments[attachment_id] = attachment
-                chunks[attachment_id] = []
-            if row["filedata"] is not None:
-                chunks[attachment_id].append(row["filedata"])
+        return response
 
-        response = []
-        for attachment_id, attachment in attachments.items():
-            attachment["content"] = base64.b64encode(b"".join(chunks[attachment_id])).decode("ascii")
-            response.append(attachment)
+
+@app.get("/tickets/{ticket_id}/attachments", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=List[AttachmentsResponse])
+def get_ticket_attachments(ticket_id: int):
+    """
+    Retrieve the attachments for a single ticket by its unique ID.
+    Returns a 404 error if the ticket cannot be found or has no attachments.
+    """
+    with _get_engine().connect() as conn:
+        response = _query_ticket_attachments(conn, [ticket_id])
+
+        if not response:
+            raise HTTPException(status_code=404, detail="Ticket or Attachments not found")
+
         return response
 
 
