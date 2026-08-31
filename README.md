@@ -248,16 +248,6 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
     -   **Errors:**
         -   `404` if the ticket does not exist or has no messages.
 
--   **GET /tickets/messages**
-    -   **Description:** Retrieves the messages for a comma-separated list of ticket IDs.
-    -   **Example:**
-        ```bash
-        curl -X GET "http://localhost:8080/tickets/messages?ticket_ids=123,456" -H "X-API-Key: your_osTicket_api_key"
-        ```
-    -   **Errors:**
-        -   `422` if `ticket_ids` is missing.
-        -   `404` if the tickets do not exist or no messages found.
-
 -   **GET /tickets/{ticket_id}/attachments**
     -   **Description:** Retrieves the attachments for a single ticket by its ID, including file metadata, base64-encoded content, and the message entry they belong to.
     -   **Example:**
@@ -267,8 +257,42 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
     -   **Errors:**
         -   `404` if the ticket does not exist or has no attachments.
 
--   **GET /tickets/attachments**
+### Messages
+
+-   **GET /messages**
+    -   **Description:** Retrieves the messages for a comma-separated list of ticket IDs.
+    -   **Example:**
+        ```bash
+        curl -X GET "http://localhost:8080/messages?ticket_ids=123,456" -H "X-API-Key: your_osTicket_api_key"
+        ```
+    -   **Errors:**
+        -   `422` if `ticket_ids` is missing.
+        -   `404` if the tickets do not exist or no messages found.
+
+-   **GET /tickets/messages** *(deprecated - use `GET /messages` instead)*
+    -   **Description:** Same as `GET /messages`, kept for backward compatibility.
+    -   **Example:**
+        ```bash
+        curl -X GET "http://localhost:8080/tickets/messages?ticket_ids=123,456" -H "X-API-Key: your_osTicket_api_key"
+        ```
+    -   **Errors:**
+        -   `422` if `ticket_ids` is missing.
+        -   `404` if the tickets do not exist or no messages found.
+
+### Attachments
+
+-   **GET /attachments**
     -   **Description:** Retrieves the attachments for a comma-separated list of ticket IDs, including file metadata, base64-encoded content, and the message entry they belong to.
+    -   **Example:**
+        ```bash
+        curl -X GET "http://localhost:8080/attachments?ticket_ids=123,456" -H "X-API-Key: your_osTicket_api_key"
+        ```
+    -   **Errors:**
+        -   `422` if `ticket_ids` is missing.
+        -   `404` if the tickets do not exist or no attachments found.
+
+-   **GET /tickets/attachments** *(deprecated - use `GET /attachments` instead)*
+    -   **Description:** Same as `GET /attachments`, kept for backward compatibility.
     -   **Example:**
         ```bash
         curl -X GET "http://localhost:8080/tickets/attachments?ticket_ids=123,456" -H "X-API-Key: your_osTicket_api_key"
