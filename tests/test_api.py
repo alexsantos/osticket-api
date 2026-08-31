@@ -471,6 +471,8 @@ def test_get_ticket_includes_subject_message_and_closed(client: TestClient, db_c
 
         ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated, closed) VALUES ('CONTENT-1', :uid, 1, NOW(), NOW(), '2026-01-02 03:04:05')"), {"uid": user_id})
         ticket_id = ticket_res.lastrowid
+        second_ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('CONTENT-2', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        second_ticket_id = second_ticket_res.lastrowid
         db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, properties, created, updated) VALUES (1, 'Open', 'open', '{}', NOW(), NOW())"))
 
         thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
@@ -538,15 +540,40 @@ def test_add_attachment_to_ticket(client: TestClient, db_conn):
         thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
         thread_id = thread_res.lastrowid
         
-        db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": thread_id})
-        
+        entry_res = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": thread_id})
+        entry_id = entry_res.lastrowid
+
         api_key = "attachment-key"
         db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
 
     headers = {"X-API-Key": api_key}
-    response = client.post(f"/tickets/{ticket_id}/attach", headers=headers, files={"file": ("test.txt", io.BytesIO(b"test"), "text/plain")})
+    response = client.post(f"/tickets/{ticket_id}/messages/{entry_id}/attach", headers=headers, files={"file": ("test.txt", io.BytesIO(b"test"), "text/plain")})
     assert response.status_code == 200
-    response = client.post(f"/tickets/0/attach", headers=headers, files={"file": ("test.txt", io.BytesIO(b"test"), "text/plain")})
+    response = client.post(f"/tickets/0/messages/0/attach", headers=headers, files={"file": ("test.txt", io.BytesIO(b"test"), "text/plain")})
+    assert response.status_code == 404
+
+
+def test_add_attachment_rejects_entry_from_other_object_type(client: TestClient, db_conn):
+    with db_conn.begin():
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Attachment User', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'attachment2@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('2', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+
+        # A thread for a different object type that happens to share the same object_id as the ticket.
+        other_thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'A', NOW())"), {"tid": ticket_id})
+        other_thread_id = other_thread_res.lastrowid
+        other_entry_res = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": other_thread_id})
+        other_entry_id = other_entry_res.lastrowid
+
+        api_key = "attachment-cross-type-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    headers = {"X-API-Key": api_key}
+    response = client.post(f"/tickets/{ticket_id}/messages/{other_entry_id}/attach", headers=headers, files={"file": ("test.txt", io.BytesIO(b"test"), "text/plain")})
     assert response.status_code == 404
 
 
@@ -559,25 +586,40 @@ def test_list_ticket_attachments(client: TestClient, db_conn):
 
         ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('ATTACH-1', :uid, 1, NOW(), NOW())"), {"uid": user_id})
         ticket_id = ticket_res.lastrowid
+        second_ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('CONTENT-2', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        second_ticket_id = second_ticket_res.lastrowid
         thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
         thread_id = thread_res.lastrowid
+        second_thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": second_ticket_id})
+        second_thread_id = second_thread_res.lastrowid
         entry_res = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": thread_id})
         entry_id = entry_res.lastrowid
+        second_entry_res = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, type, title, body, poster, created, updated) VALUES (:thid, 'M', 'Second ticket message', 'Second ticket text', 'Poster', NOW(), NOW())"), {"thid": second_thread_res.lastrowid})
+        second_entry_id = second_entry_res.lastrowid
         file_res = db_conn.execute(text("INSERT INTO ost_file (ft, type, size, name, `key`, signature, created) VALUES ('T', 'text/plain', 4, 'test.txt', 'key', 'signature', NOW())"))
         file_id = file_res.lastrowid
+        second_file_res = db_conn.execute(text("INSERT INTO ost_file (ft, type, size, name, `key`, signature, created) VALUES ('T', 'text/plain', 4, 'test2.txt', 'key', 'signature', NOW())"))
+        second_file_id = second_file_res.lastrowid
         db_conn.execute(text("INSERT INTO ost_file_chunk (file_id, chunk_id, filedata) VALUES (:fid, 0, :data)"), {"fid": file_id, "data": b"test"})
         db_conn.execute(text("INSERT INTO ost_attachment (object_id, type, file_id, inline) VALUES (:eid, 'H', :fid, 0)"), {"eid": entry_id, "fid": file_id})
+        db_conn.execute(text("INSERT INTO ost_file_chunk (file_id, chunk_id, filedata) VALUES (:fid, 0, :data)"), {"fid": second_file_id, "data": b"test"})
+        db_conn.execute(text("INSERT INTO ost_attachment (object_id, type, file_id, inline) VALUES (:eid, 'H', :fid, 0)"), {"eid": second_entry_id, "fid": second_file_id})
 
         api_key = "attachment-list-key"
         db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
 
-    response = client.get(f"/tickets/{ticket_id}/attachments", headers={"X-API-Key": api_key})
+    response = client.get(f"/tickets/attachments?ticket_ids={ticket_id},{second_ticket_id}", headers={"X-API-Key": api_key})
     assert response.status_code == 200
     assert response.json()[0]["file_id"] == file_id
     assert response.json()[0]["entry_id"] == entry_id
     assert response.json()[0]["thread_id"] == thread_id
     assert response.json()[0]["name"] == "test.txt"
     assert response.json()[0]["content"] == base64.b64encode(b"test").decode("ascii")
+    assert response.json()[1]["file_id"] == second_file_id
+    assert response.json()[1]["entry_id"] == second_entry_id
+    assert response.json()[1]["thread_id"] == second_thread_id
+    assert response.json()[1]["name"] == "test2.txt"
+    assert response.json()[1]["content"] == base64.b64encode(b"test").decode("ascii")
 
 
 def test_list_ticket_attachments_not_found(client: TestClient, db_conn):
@@ -585,7 +627,7 @@ def test_list_ticket_attachments_not_found(client: TestClient, db_conn):
         api_key = "attachment-list-not-found-key"
         db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
 
-    response = client.get("/tickets/99999/attachments", headers={"X-API-Key": api_key})
+    response = client.get("/tickets/attachments?ticket_ids=99999", headers={"X-API-Key": api_key})
     assert response.status_code == 404
 
 
@@ -601,7 +643,8 @@ def test_add_attachment_file_too_large(client: TestClient, db_conn, monkeypatch)
 
         thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
         thread_id = thread_res.lastrowid
-        db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": thread_id})
+        entry_res = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": thread_id})
+        entry_id = entry_res.lastrowid
 
         api_key = "upload-limit-key"
         db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
@@ -612,7 +655,7 @@ def test_add_attachment_file_too_large(client: TestClient, db_conn, monkeypatch)
 
     headers = {"X-API-Key": api_key}
     oversized = io.BytesIO(b"A" * 11)
-    response = client.post(f"/tickets/{ticket_id}/attach", headers=headers, files={"file": ("big.txt", oversized, "text/plain")})
+    response = client.post(f"/tickets/{ticket_id}/messages/{entry_id}/attach", headers=headers, files={"file": ("big.txt", oversized, "text/plain")})
     assert response.status_code == 413
     assert "0 MB" in response.json()["detail"]
 
@@ -631,7 +674,7 @@ def test_add_attachment_db_error(client: TestClient, db_conn, monkeypatch):
     monkeypatch.setattr(main.engine, "begin", mock_begin)
 
     headers = {"X-API-Key": api_key}
-    response = client.post("/tickets/1/attach", headers=headers, files={"file": ("test.txt", io.BytesIO(b"data"), "text/plain")})
+    response = client.post("/tickets/1/messages/1/attach", headers=headers, files={"file": ("test.txt", io.BytesIO(b"data"), "text/plain")})
     assert response.status_code == 500
     assert "attachment" in response.json()["detail"].lower()
 
@@ -1090,6 +1133,8 @@ def test_list_ticket_messages(client: TestClient, db_conn):
 
         ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated, closed) VALUES ('CONTENT-1', :uid, 1, NOW(), NOW(), '2026-01-02 03:04:05')"), {"uid": user_id})
         ticket_id = ticket_res.lastrowid
+        second_ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('CONTENT-2', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        second_ticket_id = second_ticket_res.lastrowid
         db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, properties, created, updated) VALUES (1, 'Open', 'open', '{}', NOW(), NOW())"))
 
         thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
@@ -1099,21 +1144,24 @@ def test_list_ticket_messages(client: TestClient, db_conn):
         db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, type, title, body, poster, created, updated) VALUES (:thid, 'R', 'A reply', 'Reply text', 'Poster', NOW(), NOW())"), {"thid": thread_id})
         db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, type, title, body, poster, created, updated) VALUES (:thid, 'N', 'A note', 'Note text', 'Poster', NOW(), NOW())"), {"thid": thread_id})
 
+        second_thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": second_ticket_id})
+        db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, type, title, body, poster, created, updated) VALUES (:thid, 'M', 'Second ticket message', 'Second ticket text', 'Poster', NOW(), NOW())"), {"thid": second_thread_res.lastrowid})
+
         api_key = "content-key"
         db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
 
     headers = {"X-API-Key": api_key}
-    response = client.get(f"/tickets/{ticket_id}/messages", headers=headers)
+    response = client.get(f"/tickets/messages?ticket_ids={ticket_id},{second_ticket_id}", headers=headers)
     assert response.status_code == 200
     messages = response.json()
-    assert len(messages) == 3
-    assert {m["subject"] for m in messages} == {"A message", "A reply", "A note"}
-    assert {m["message"] for m in messages} == {"Message text", "Reply text", "Note text"}
+    assert len(messages) == 4
+    assert {m["subject"] for m in messages} == {"A message", "A reply", "A note", "Second ticket message"}
+    assert {m["message"] for m in messages} == {"Message text", "Reply text", "Note text", "Second ticket text"}
 
 def test_list_ticket_messages_not_found(client: TestClient, db_conn):
     with db_conn.begin():
         api_key = "attachment-list-not-found-key"
         db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
 
-    response = client.get("/tickets/99999/messages", headers={"X-API-Key": api_key})
+    response = client.get("/tickets/messages?ticket_ids=99999", headers={"X-API-Key": api_key})
     assert response.status_code == 404

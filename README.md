@@ -236,20 +236,26 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         ```bash
         curl -X GET "http://localhost:8080/tickets/123" -H "X-API-Key: your_osTicket_api_key"
         ```
+    -   **Errors:**
+        -   `404` if the ticket does not exist.
 
--   **GET /tickets/{ticket_id}/messages**
-    -   **Description:** Retrieves the messages for a single ticket by its ID.
+-   **GET /tickets/messages**
+    -   **Description:** Retrieves the messages for a comma-separated list of ticket IDs.
     -   **Example:**
         ```bash
-        curl -X GET "http://localhost:8080/tickets/123/messages" -H "X-API-Key: your_osTicket_api_key"
+        curl -X GET "http://localhost:8080/tickets/messages?ticket_ids=123,456" -H "X-API-Key: your_osTicket_api_key"
         ```
+    -   **Errors:**
+        -   `404` if the tickets do not exist or no messages found.
 
--   **GET /tickets/{ticket_id}/attachments**
-    -   **Description:** Retrieves the attachments for a single ticket by its ID, including file metadata, base64-encoded content, and the message entry they belong to.
+-   **GET /tickets/attachments**
+    -   **Description:** Retrieves the attachments for a comma-separated list of ticket IDs, including file metadata, base64-encoded content, and the message entry they belong to.
     -   **Example:**
         ```bash
-        curl -X GET "http://localhost:8080/tickets/123/attachments" -H "X-API-Key: your_osTicket_api_key"
+        curl -X GET "http://localhost:8080/tickets/attachments?ticket_ids=123,456" -H "X-API-Key: your_osTicket_api_key"
         ```
+    -   **Errors:**
+        -   `404` if the tickets do not exist or no attachments found.
 
 -   **POST /tickets**
     -   **Description:** Creates a new ticket.
@@ -277,18 +283,19 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         }'
         ```
 
--   **POST /tickets/{ticket_id}/attach**
-    -   **Description:** Attaches a file to an existing ticket.
+-   **POST /tickets/{ticket_id}/messages/{entry_id}/attach**
+    -   **Description:** Attaches a file to an existing message of an existing ticket.
     -   **Path Parameter:**
         -   `ticket_id`: The ID of the ticket to attach the file to.
+        -   `entry_id`: The ID of the entry to attach the file to.
     -   **Form Data:**
         -   `file`: The file to attach. Maximum size is controlled by `MAX_UPLOAD_MB` (default 10 MB). Files exceeding the limit return `413`.
     -   **Errors:**
-        -   `404` if the ticket does not exist.
+        -   `404` if the ticket or message do not exist.
         -   `413` if the file exceeds the configured size limit.
     -   **Example:**
         ```bash
-        curl -X POST "http://localhost:8080/tickets/123/attach" \
+        curl -X POST "http://localhost:8080/tickets/123/messages/456/attach" \
         -H "X-API-Key: your_osTicket_api_key" \
         -F "file=@/path/to/your/file.txt"
         ```
