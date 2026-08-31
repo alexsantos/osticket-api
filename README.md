@@ -327,7 +327,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         }'
         ```
 
--   **POST /tickets/{ticket_id}/messages/{entry_id}/attach**
+-   **POST /tickets/{ticket_id}/messages/{entry_id}/attachments**
     -   **Description:** Attaches a file to an existing message of an existing ticket.
     -   **Path Parameter:**
         -   `ticket_id`: The ID of the ticket to attach the file to.
@@ -339,12 +339,15 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -   `413` if the file exceeds the configured size limit.
     -   **Example:**
         ```bash
-        curl -X POST "http://localhost:8080/tickets/123/messages/456/attach" \
+        curl -X POST "http://localhost:8080/tickets/123/messages/456/attachments" \
         -H "X-API-Key: your_osTicket_api_key" \
         -F "file=@/path/to/your/file.txt"
         ```
 
--   **POST /tickets/{ticket_id}/note**
+-   **POST /tickets/{ticket_id}/messages/{entry_id}/attach** *(deprecated - use `POST .../messages/{entry_id}/attachments` instead)*
+    -   **Description:** Same as above, kept for backward compatibility.
+
+-   **POST /tickets/{ticket_id}/notes**
     -   **Description:** Adds an internal (staff-only) note to a ticket's thread. Notes are never visible to the ticket's owner and generate no outbound email — useful for integrations to leave an audit trail.
     -   **Path Parameter:**
         -   `ticket_id`: The ID of the ticket to add the note to.
@@ -356,7 +359,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -   `404` if the ticket does not exist.
     -   **Example:**
         ```bash
-        curl -X POST "http://localhost:8080/tickets/123/note" \
+        curl -X POST "http://localhost:8080/tickets/123/notes" \
         -H "Content-Type: application/json" \
         -H "X-API-Key: your_osTicket_api_key" \
         -d '{
@@ -365,7 +368,10 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         }'
         ```
 
--   **POST /tickets/{ticket_id}/message**
+-   **POST /tickets/{ticket_id}/note** *(deprecated - use `POST /tickets/{ticket_id}/notes` instead)*
+    -   **Description:** Same as above, kept for backward compatibility.
+
+-   **POST /tickets/{ticket_id}/messages**
     -   **Description:** Adds a public message or reply to a ticket's thread and returns the created thread and entry IDs.
     -   **Path Parameter:**
         -   `ticket_id`: The ID of the ticket to reply to.
@@ -385,7 +391,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -   `404` if the ticket does not exist or has no thread.
     -   **Example:**
         ```bash
-        curl -X POST "http://localhost:8080/tickets/123/message" \
+        curl -X POST "http://localhost:8080/tickets/123/messages" \
         -H "Content-Type: application/json" \
         -H "X-API-Key: your_osTicket_api_key" \
         -d '{
@@ -393,6 +399,9 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
           "body": "The requested update is ready."
         }'
         ```
+
+-   **POST /tickets/{ticket_id}/message** *(deprecated - use `POST /tickets/{ticket_id}/messages` instead)*
+    -   **Description:** Same as above, kept for backward compatibility.
 
 -   **PUT /tickets/{ticket_id}/status**
     -   **Description:** Updates a ticket's status.
@@ -439,8 +448,26 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         }'
         ```
 
--   **PUT /tickets/{ticket_id}/message**
-    -   **Description:** Updates the latest message entry on a ticket thread.
+-   **PUT /tickets/{ticket_id}/messages/{entry_id}**
+    -   **Description:** Updates a specific message entry on a ticket's thread.
+    -   **Path Parameter:**
+        -   `ticket_id`: The ID of the ticket to update.
+        -   `entry_id`: The ID of the message entry to update.
+    -   **Errors:**
+        -   `400` if neither `title` nor `body` is provided.
+        -   `404` if the ticket or message entry does not exist.
+    -   **Example:**
+        ```bash
+        curl -X PUT "http://localhost:8080/tickets/123/messages/456" \
+        -H "X-API-Key: your_osTicket_api_key" \
+        -d '{
+          "title": "Test Message",
+          "body": "This is a test message."
+        }'
+        ```
+
+-   **PUT /tickets/{ticket_id}/message** *(deprecated - use `PUT /tickets/{ticket_id}/messages/{entry_id}` instead)*
+    -   **Description:** Updates the latest message entry on a ticket thread, instead of a specifically addressed one. Kept for backward compatibility.
     -   **Path Parameter:**
         -   `ticket_id`: The ID of the ticket to update.
     -   **Errors:**
@@ -455,7 +482,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         }'
         ```
 
--   **PUT /tickets/{ticket_id}/attachment/{file_id}**
+-   **PUT /tickets/{ticket_id}/attachments/{file_id}**
     -   **Description:** Replaces the contents of an existing attachment on a ticket.
     -   **Path Parameter:**
         -   `ticket_id`: The ID of the ticket to update.
@@ -467,10 +494,13 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -   `413` if the file exceeds the configured size limit.
     -   **Example:**
         ```bash
-        curl -X PUT "http://localhost:8080/tickets/123/attachment/1" \
+        curl -X PUT "http://localhost:8080/tickets/123/attachments/1" \
         -H "X-API-Key: your_osTicket_api_key" \
         -F "file=@/path/to/your/file.txt"
         ```
+
+-   **PUT /tickets/{ticket_id}/attachment/{file_id}** *(deprecated - use `PUT /tickets/{ticket_id}/attachments/{file_id}` instead)*
+    -   **Description:** Same as above, kept for backward compatibility.
 
 -   **PUT /tickets/{ticket_id}/close**
     -   **Description:** Closes a ticket by setting its status to the configured "closed" state in osTicket.
