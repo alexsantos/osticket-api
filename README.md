@@ -231,7 +231,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
             ```
 
 -   **GET /tickets/{ticket_id}**
-    -   **Description:** Retrieves a single ticket by its ID, including all associated custom field data, its original `subject`/`message` (from the ticket thread's first entry), and `closed` timestamp (`null` if still open). Note: `GET /tickets` (list) does not include `subject`/`message`/`closed` - fetch the individual ticket for those.
+    -   **Description:** Retrieves a single ticket by its ID, including all associated custom field data, its original `subject`/`message` (from the ticket thread's first entry), and `closed` timestamp (`null` if still open). Note: `GET /tickets` (list) also includes `subject`/`message`/`custom_fields`, but not `closed` - fetch the individual ticket for that.
     -   **Example:**
         ```bash
         curl -X GET "http://localhost:8080/tickets/123" -H "X-API-Key: your_osTicket_api_key"

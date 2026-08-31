@@ -631,6 +631,15 @@ def test_list_ticket_attachments_not_found(client: TestClient, db_conn):
     assert response.status_code == 404
 
 
+def test_list_ticket_attachments_missing_ticket_ids(client: TestClient, db_conn):
+    with db_conn.begin():
+        api_key = "attachment-list-missing-ids-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    response = client.get("/tickets/attachments", headers={"X-API-Key": api_key})
+    assert response.status_code == 422
+
+
 def test_add_attachment_file_too_large(client: TestClient, db_conn, monkeypatch):
     with db_conn.begin():
         user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Upload Limit User', NOW(), NOW(), 0)"))
@@ -1165,3 +1174,12 @@ def test_list_ticket_messages_not_found(client: TestClient, db_conn):
 
     response = client.get("/tickets/messages?ticket_ids=99999", headers={"X-API-Key": api_key})
     assert response.status_code == 404
+
+
+def test_list_ticket_messages_missing_ticket_ids(client: TestClient, db_conn):
+    with db_conn.begin():
+        api_key = "messages-list-missing-ids-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    response = client.get("/tickets/messages", headers={"X-API-Key": api_key})
+    assert response.status_code == 422
