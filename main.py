@@ -508,6 +508,9 @@ def list_ticket_messages(ticket_ids: List[int] = Depends(CommaSeparatedInts("tic
     Retrieve the messages for a list of tickets by their unique IDs.
     Returns a 404 error if no matching tickets or messages are found.
     """
+    if not ticket_ids:
+        raise HTTPException(status_code=422, detail="Query parameter 'ticket_ids' is required")
+
     with _get_engine().connect() as conn:
         query = text("""
                 SELECT t.ticket_id,
@@ -546,6 +549,9 @@ def list_ticket_attachments(ticket_ids: List[int] = Depends(CommaSeparatedInts("
     Retrieve the attachments for a list of tickets by their unique ID.
     Returns a 404 error if no matching tickets or attachments are found.
     """
+    if not ticket_ids:
+        raise HTTPException(status_code=422, detail="Query parameter 'ticket_ids' is required")
+
     with _get_engine().connect() as conn:
         query = text("""
                 SELECT t.ticket_id,
