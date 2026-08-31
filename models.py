@@ -80,7 +80,7 @@ class MessagesResponse(BaseModel):
     subject: Optional[str] = None
     message: Optional[str] = None
     created: datetime
-    updated: datetime
+    updated: Optional[datetime] = None
 
 
 class StatusResponse(BaseModel):

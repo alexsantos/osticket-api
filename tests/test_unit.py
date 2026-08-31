@@ -1,8 +1,11 @@
+from datetime import datetime
+
 import pytest
 from unittest.mock import Mock
 from starlette.datastructures import URL, Headers
 from utils import make_url
 from main import _server_supports_json_functions
+from models import MessagesResponse
 
 
 def _mock_request(url: str, query_params: dict, headers: dict = None) -> Mock:
@@ -97,3 +100,22 @@ def test_server_supports_json_functions(version_string, expected):
     "5.5.5-10.11.5-MariaDB" version string format.
     """
     assert _server_supports_json_functions(version_string) is expected
+
+
+def test_messages_response_tolerates_null_updated():
+    """
+    Some osTicket installations have ost_thread_entry rows with a NULL
+    `updated` column (e.g. legacy rows predating a schema change), even
+    though `created` is always populated. The response model must not
+    reject those rows.
+    """
+    row = MessagesResponse(
+        ticket_id=1,
+        thread_id=1,
+        entry_id=1,
+        type="M",
+        poster="API",
+        created=datetime(2026, 1, 1),
+        updated=None,
+    )
+    assert row.updated is None
