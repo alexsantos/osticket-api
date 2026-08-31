@@ -5,7 +5,7 @@ from unittest.mock import Mock
 from starlette.datastructures import URL, Headers
 from utils import make_url
 from main import _server_supports_json_functions
-from models import MessagesResponse
+from models import MessagesResponse, UserResponse
 
 
 def _mock_request(url: str, query_params: dict, headers: dict = None) -> Mock:
@@ -115,6 +115,18 @@ def test_messages_response_tolerates_null_updated():
         entry_id=1,
         type="M",
         poster="API",
+        created=datetime(2026, 1, 1),
+        updated=None,
+    )
+    assert row.updated is None
+
+
+def test_user_response_tolerates_null_updated():
+    """Same NULL-updated risk as ost_thread_entry, but for ost_user rows."""
+    row = UserResponse(
+        id=1,
+        name="Test User",
+        email="test@example.com",
         created=datetime(2026, 1, 1),
         updated=None,
     )
