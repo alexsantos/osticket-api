@@ -735,6 +735,40 @@ def test_list_attachments(client: TestClient, db_conn):
     assert response.json()[0]["content"] == base64.b64encode(b"test").decode("ascii")
 
 
+def test_list_attachments_without_stored_chunks_returns_null_content(client: TestClient, db_conn):
+    """
+    A file whose bytes live in a non-database storage backend (ost_file.bk
+    != 'D', e.g. filesystem storage) has no ost_file_chunk rows. content
+    must come back null, not "" - an empty string would misleadingly imply
+    a genuinely empty file.
+    """
+    with db_conn.begin():
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'External Backend User', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'external-backend@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('EXT-BACKEND-1', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+        thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
+        thread_id = thread_res.lastrowid
+        entry_res = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": thread_id})
+        entry_id = entry_res.lastrowid
+        file_res = db_conn.execute(text("INSERT INTO ost_file (ft, bk, type, size, name, `key`, signature, created) VALUES ('T', 'F', 'image/png', 23547, 'screenshot.png', 'key2', 'signature2', NOW())"))
+        file_id = file_res.lastrowid
+        # No ost_file_chunk row for this file_id - bytes are stored elsewhere.
+        db_conn.execute(text("INSERT INTO ost_attachment (object_id, type, file_id, inline) VALUES (:eid, 'H', :fid, 1)"), {"eid": entry_id, "fid": file_id})
+
+        api_key = "external-backend-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    response = client.get(f"/attachments?ticket_ids={ticket_id}", headers={"X-API-Key": api_key})
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    assert response.json()[0]["size"] == 23547
+    assert response.json()[0]["content"] is None
+
+
 def test_list_attachments_not_found(client: TestClient, db_conn):
     with db_conn.begin():
         api_key = "top-level-attachment-not-found-key"
