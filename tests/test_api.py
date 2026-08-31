@@ -553,6 +553,32 @@ def test_add_attachment_to_ticket(client: TestClient, db_conn):
     assert response.status_code == 404
 
 
+def test_add_attachment_to_ticket_via_attachments_endpoint(client: TestClient, db_conn):
+    with db_conn.begin():
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Attachment Endpoint User', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'attachment-endpoint@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('ATTACH-EP-1', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+
+        thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
+        thread_id = thread_res.lastrowid
+
+        entry_res = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": thread_id})
+        entry_id = entry_res.lastrowid
+
+        api_key = "attachment-endpoint-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    headers = {"X-API-Key": api_key}
+    response = client.post(f"/tickets/{ticket_id}/messages/{entry_id}/attachments", headers=headers, files={"file": ("test.txt", io.BytesIO(b"test"), "text/plain")})
+    assert response.status_code == 200
+    response = client.post(f"/tickets/0/messages/0/attachments", headers=headers, files={"file": ("test.txt", io.BytesIO(b"test"), "text/plain")})
+    assert response.status_code == 404
+
+
 def test_add_attachment_rejects_entry_from_other_object_type(client: TestClient, db_conn):
     with db_conn.begin():
         user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Attachment User', NOW(), NOW(), 0)"))
@@ -805,6 +831,33 @@ def test_add_note_to_ticket(client: TestClient, db_conn):
     assert row["title"] == ""
 
 
+def test_add_note_to_ticket_via_notes_endpoint(client: TestClient, db_conn):
+    with db_conn.begin():
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Notes Endpoint User', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'notes-endpoint@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('NOTES-EP-1', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+
+        db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
+
+        api_key = "notes-endpoint-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    headers = {"X-API-Key": api_key}
+    response = client.post(f"/tickets/{ticket_id}/notes", headers=headers, json={"body": "Note via the new endpoint."})
+    assert response.status_code == 200
+    entry_id = response.json()["entry_id"]
+    assert entry_id > 0
+
+    with db_conn.begin():
+        row = db_conn.execute(text("SELECT type, body FROM ost_thread_entry WHERE id = :id"), {"id": entry_id}).mappings().first()
+    assert row["type"] == "N"
+    assert row["body"] == "Note via the new endpoint."
+
+
 def test_add_message_to_ticket_returns_thread_and_entry_ids(client: TestClient, db_conn):
     with db_conn.begin():
         user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Message User', NOW(), NOW(), 0)"))
@@ -837,6 +890,38 @@ def test_add_message_to_ticket_returns_thread_and_entry_ids(client: TestClient, 
     assert row["body"] == "The requested update is ready."
     assert row["poster"] == "API"
     assert row["title"] == "A reply"
+
+
+def test_add_message_via_messages_endpoint(client: TestClient, db_conn):
+    with db_conn.begin():
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Messages Endpoint User', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'messages-endpoint@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('MESSAGES-EP-1', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+        thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
+        thread_id = thread_res.lastrowid
+
+        api_key = "messages-endpoint-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    response = client.post(
+        f"/tickets/{ticket_id}/messages",
+        headers={"X-API-Key": api_key},
+        json={"title": "A reply", "body": "Sent via the new endpoint."},
+    )
+    assert response.status_code == 200
+    assert response.json()["thread_id"] == thread_id
+    entry_id = response.json()["entry_id"]
+    assert entry_id > 0
+
+    with db_conn.begin():
+        row = db_conn.execute(text("SELECT thread_id, type, body FROM ost_thread_entry WHERE id = :id"), {"id": entry_id}).mappings().first()
+    assert row["thread_id"] == thread_id
+    assert row["type"] == "M"
+    assert row["body"] == "Sent via the new endpoint."
 
 
 def test_add_note_default_poster(client: TestClient, db_conn):
@@ -983,6 +1068,59 @@ def test_update_ticket_metadata_and_message(client: TestClient, db_conn):
     assert updated_ticket["team_id"] == 2
 
 
+def test_update_ticket_message_entry(client: TestClient, db_conn):
+    with db_conn.begin():
+        api_key = "ticket-update-entry-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Update Entry User', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'update-entry@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('UPD-ENTRY-1', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+
+        thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
+        thread_id = thread_res.lastrowid
+        first_entry_res = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, type, poster, title, body, created, updated) VALUES (:thid, 'M', 'Poster', 'First subject', 'First body', NOW(), NOW())"), {"thid": thread_id})
+        first_entry_id = first_entry_res.lastrowid
+        second_entry_res = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, type, poster, title, body, created, updated) VALUES (:thid, 'R', 'Poster', 'Second subject', 'Second body', NOW(), NOW())"), {"thid": thread_id})
+        second_entry_id = second_entry_res.lastrowid
+
+    headers = {"X-API-Key": api_key}
+
+    response = client.put(f"/tickets/{ticket_id}/messages/{first_entry_id}", headers=headers, json={"body": "Updated first body"})
+    assert response.status_code == 200
+    assert response.json()["status"] == "updated"
+
+    with db_conn.begin():
+        first_entry = db_conn.execute(text("SELECT title, body FROM ost_thread_entry WHERE id = :eid"), {"eid": first_entry_id}).mappings().first()
+        second_entry = db_conn.execute(text("SELECT title, body FROM ost_thread_entry WHERE id = :eid"), {"eid": second_entry_id}).mappings().first()
+
+    assert first_entry["title"] == "First subject"
+    assert first_entry["body"] == "Updated first body"
+    assert second_entry["body"] == "Second body"
+
+
+def test_update_ticket_message_entry_not_found(client: TestClient, db_conn):
+    with db_conn.begin():
+        api_key = "ticket-update-entry-not-found-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    response = client.put("/tickets/99999/messages/99999", headers={"X-API-Key": api_key}, json={"body": "x"})
+    assert response.status_code == 404
+
+
+def test_update_ticket_message_entry_requires_title_or_body(client: TestClient, db_conn):
+    with db_conn.begin():
+        api_key = "ticket-update-entry-empty-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    response = client.put("/tickets/1/messages/1", headers={"X-API-Key": api_key}, json={})
+    assert response.status_code == 400
+
+
 def test_update_ticket_attachment(client: TestClient, db_conn):
     with db_conn.begin():
         api_key = "ticket-attachment-update-key"
@@ -1021,6 +1159,41 @@ def test_update_ticket_attachment(client: TestClient, db_conn):
     assert updated_file["name"] == "new.txt"
     assert updated_file["size"] == 8
     assert updated_chunk["filedata"] == b"new-data"
+
+
+def test_update_ticket_attachment_via_attachments_endpoint(client: TestClient, db_conn):
+    with db_conn.begin():
+        api_key = "ticket-attachment-endpoint-update-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Attachment Endpoint Update User', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'attachment-endpoint-update@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('ATT-EP-1', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+
+        thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
+        thread_id = thread_res.lastrowid
+        entry_res = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": thread_id})
+        entry_id = entry_res.lastrowid
+
+        file_res = db_conn.execute(text("INSERT INTO ost_file (ft, type, size, name, `key`, signature, created) VALUES ('T', 'text/plain', 4, 'old.txt', 'oldkey2', 'oldsig2', NOW())"))
+        file_id = file_res.lastrowid
+        db_conn.execute(text("INSERT INTO ost_file_chunk (file_id, chunk_id, filedata) VALUES (:fid, 0, :d)"), {"fid": file_id, "d": b"old"})
+        db_conn.execute(text("INSERT INTO ost_attachment (object_id, type, file_id) VALUES (:eid, 'H', :fid)"), {"eid": entry_id, "fid": file_id})
+
+    headers = {"X-API-Key": api_key}
+    response = client.put(f"/tickets/{ticket_id}/attachments/{file_id}", headers=headers, files={"file": ("new.txt", io.BytesIO(b"new-data"), "text/plain")})
+    assert response.status_code == 200
+    assert response.json()["status"] == "updated"
+
+    with db_conn.begin():
+        updated_file = db_conn.execute(text("SELECT name, size FROM ost_file WHERE id = :fid"), {"fid": file_id}).mappings().first()
+
+    assert updated_file["name"] == "new.txt"
+    assert updated_file["size"] == 8
 
 
 def test_get_ticket_with_various_custom_fields(client: TestClient, db_conn: Connection):

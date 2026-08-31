@@ -827,7 +827,7 @@ def _generate_ticket_number(conn) -> str:
     return mask
 
 
-@app.post("/tickets/{ticket_id}/messages/{entry_id}/attach", dependencies=[Depends(verify_token)], tags=["Tickets"],
+@app.post("/tickets/{ticket_id}/messages/{entry_id}/attachments", dependencies=[Depends(verify_token)], tags=["Tickets"],
           response_model=AttachmentResponse)
 async def add_attachment(ticket_id: int, entry_id: int, file: UploadFile = File(...)):
     """
@@ -874,7 +874,14 @@ async def add_attachment(ticket_id: int, entry_id: int, file: UploadFile = File(
         raise HTTPException(status_code=500, detail="An internal error occurred while processing the attachment.") from e
 
 
-@app.post("/tickets/{ticket_id}/note", dependencies=[Depends(verify_token)], tags=["Tickets"],
+@app.post("/tickets/{ticket_id}/messages/{entry_id}/attach", dependencies=[Depends(verify_token)], tags=["Tickets"],
+          response_model=AttachmentResponse, deprecated=True)
+async def add_attachment_deprecated(ticket_id: int, entry_id: int, file: UploadFile = File(...)):
+    """Deprecated: use `POST /tickets/{ticket_id}/messages/{entry_id}/attachments` instead."""
+    return await add_attachment(ticket_id, entry_id, file)
+
+
+@app.post("/tickets/{ticket_id}/notes", dependencies=[Depends(verify_token)], tags=["Tickets"],
           response_model=NoteResponse)
 def add_note(ticket_id: int, note: NoteCreate):
     """
@@ -906,7 +913,14 @@ def add_note(ticket_id: int, note: NoteCreate):
         raise HTTPException(status_code=500, detail="An internal error occurred while adding the note.") from e
 
 
-@app.post("/tickets/{ticket_id}/message", dependencies=[Depends(verify_token)], tags=["Tickets"],
+@app.post("/tickets/{ticket_id}/note", dependencies=[Depends(verify_token)], tags=["Tickets"],
+          response_model=NoteResponse, deprecated=True)
+def add_note_deprecated(ticket_id: int, note: NoteCreate):
+    """Deprecated: use `POST /tickets/{ticket_id}/notes` instead."""
+    return add_note(ticket_id, note)
+
+
+@app.post("/tickets/{ticket_id}/messages", dependencies=[Depends(verify_token)], tags=["Tickets"],
           response_model=MessageResponse)
 def add_message(ticket_id: int, message: MessageCreate):
     """Add a public message or reply to a ticket's thread."""
@@ -952,6 +966,13 @@ def add_message(ticket_id: int, message: MessageCreate):
         raise HTTPException(status_code=500, detail="An internal error occurred while adding the message.") from e
 
 
+@app.post("/tickets/{ticket_id}/message", dependencies=[Depends(verify_token)], tags=["Tickets"],
+          response_model=MessageResponse, deprecated=True)
+def add_message_deprecated(ticket_id: int, message: MessageCreate):
+    """Deprecated: use `POST /tickets/{ticket_id}/messages` instead."""
+    return add_message(ticket_id, message)
+
+
 @app.put("/tickets/{ticket_id}/status", dependencies=[Depends(verify_token)], tags=["Tickets"],
          response_model=UpdateResponse)
 def update_ticket_status(ticket_id: int, payload: StatusUpdateRequest):
@@ -994,10 +1015,58 @@ def update_ticket_team(ticket_id: int, payload: TeamUpdateRequest):
         return {"status": "updated"}
 
 
-@app.put("/tickets/{ticket_id}/message", dependencies=[Depends(verify_token)], tags=["Tickets"],
+def _apply_message_entry_update(conn, ticket_id: int, entry_id: int, payload: MessageUpdateRequest):
+    updates = ["updated = NOW()"]
+    params = {"entry_id": entry_id}
+    if payload.title is not None:
+        updates.append("title = :title")
+        params["title"] = payload.title
+    if payload.body is not None:
+        updates.append("body = :body")
+        params["body"] = payload.body
+
+    conn.execute(
+        text(f"UPDATE ost_thread_entry SET {', '.join(updates)} WHERE id = :entry_id"),
+        params
+    )
+    conn.execute(
+        text("UPDATE ost_ticket SET updated = NOW() WHERE ticket_id = :ticket_id"),
+        {"ticket_id": ticket_id}
+    )
+
+
+@app.put("/tickets/{ticket_id}/messages/{entry_id}", dependencies=[Depends(verify_token)], tags=["Tickets"],
          response_model=UpdateResponse)
+def update_ticket_message_entry(ticket_id: int, entry_id: int, payload: MessageUpdateRequest):
+    """Update a specific message entry on a ticket's thread."""
+    if payload.title is None and payload.body is None:
+        raise HTTPException(status_code=400, detail="At least one of title or body must be provided.")
+
+    with _get_engine().begin() as conn:
+        exists = conn.execute(
+            text("""
+                SELECT 1
+                FROM ost_thread_entry te
+                JOIN ost_thread th ON te.thread_id = th.id
+                WHERE th.object_id = :ticket_id AND th.object_type = 'T' AND te.id = :entry_id
+            """),
+            {"ticket_id": ticket_id, "entry_id": entry_id}
+        ).scalar_one_or_none()
+        if exists is None:
+            raise HTTPException(status_code=404, detail="Ticket or message not found.")
+
+        _apply_message_entry_update(conn, ticket_id, entry_id, payload)
+        return {"status": "updated"}
+
+
+@app.put("/tickets/{ticket_id}/message", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=UpdateResponse, deprecated=True)
 def update_ticket_message(ticket_id: int, payload: MessageUpdateRequest):
-    """Update the latest message entry on a ticket thread."""
+    """
+    Deprecated: use `PUT /tickets/{ticket_id}/messages/{entry_id}` instead.
+
+    Update the latest message entry on a ticket thread.
+    """
     if payload.title is None and payload.body is None:
         raise HTTPException(status_code=400, detail="At least one of title or body must be provided.")
 
@@ -1016,27 +1085,11 @@ def update_ticket_message(ticket_id: int, payload: MessageUpdateRequest):
         if entry is None:
             raise HTTPException(status_code=404, detail="Ticket not found or has no thread entries.")
 
-        updates = ["updated = NOW()"]
-        params = {"entry_id": entry, "ticket_id": ticket_id}
-        if payload.title is not None:
-            updates.append("title = :title")
-            params["title"] = payload.title
-        if payload.body is not None:
-            updates.append("body = :body")
-            params["body"] = payload.body
-
-        conn.execute(
-            text(f"UPDATE ost_thread_entry SET {', '.join(updates)} WHERE id = :entry_id"),
-            params
-        )
-        conn.execute(
-            text("UPDATE ost_ticket SET updated = NOW() WHERE ticket_id = :ticket_id"),
-            {"ticket_id": ticket_id}
-        )
+        _apply_message_entry_update(conn, ticket_id, entry, payload)
         return {"status": "updated"}
 
 
-@app.put("/tickets/{ticket_id}/attachment/{file_id}", dependencies=[Depends(verify_token)], tags=["Tickets"],
+@app.put("/tickets/{ticket_id}/attachments/{file_id}", dependencies=[Depends(verify_token)], tags=["Tickets"],
          response_model=UpdateResponse)
 async def update_ticket_attachment(ticket_id: int, file_id: int, file: UploadFile = File(...)):
     """Replace the contents of an existing attachment on a ticket."""
@@ -1094,6 +1147,13 @@ async def update_ticket_attachment(ticket_id: int, file_id: int, file: UploadFil
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail="An internal error occurred while updating the attachment.") from e
+
+
+@app.put("/tickets/{ticket_id}/attachment/{file_id}", dependencies=[Depends(verify_token)], tags=["Tickets"],
+         response_model=UpdateResponse, deprecated=True)
+async def update_ticket_attachment_deprecated(ticket_id: int, file_id: int, file: UploadFile = File(...)):
+    """Deprecated: use `PUT /tickets/{ticket_id}/attachments/{file_id}` instead."""
+    return await update_ticket_attachment(ticket_id, file_id, file)
 
 
 @app.put("/tickets/{ticket_id}/close", dependencies=[Depends(verify_token)], tags=["Tickets"],
