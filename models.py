@@ -94,7 +94,7 @@ class UserResponse(BaseModel):
     name: str
     email: str
     created: datetime
-    updated: datetime
+    updated: Optional[datetime] = None
 
 
 class PaginatedUserResponse(BaseModel):
