@@ -216,3 +216,6 @@ __marimo__/
 .streamlit/secrets.toml
 
 log_erro.txt
+
+# Local ad-hoc scripts (may contain secrets/credentials, never commit)
+scripts/

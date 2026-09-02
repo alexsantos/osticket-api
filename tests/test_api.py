@@ -735,13 +735,17 @@ def test_list_attachments(client: TestClient, db_conn):
     assert response.json()[0]["content"] == base64.b64encode(b"test").decode("ascii")
 
 
-def test_list_attachments_without_stored_chunks_returns_null_content(client: TestClient, db_conn):
+def test_list_attachments_without_stored_chunks_returns_null_content(client: TestClient, db_conn, monkeypatch):
     """
     A file whose bytes live in a non-database storage backend (ost_file.bk
-    != 'D', e.g. filesystem storage) has no ost_file_chunk rows. content
-    must come back null, not "" - an empty string would misleadingly imply
-    a genuinely empty file.
+    != 'D', e.g. filesystem storage) has no ost_file_chunk rows. If the
+    osTicket HTTP fallback is unconfigured or fails, content must come back
+    null, not "" - an empty string would misleadingly imply a genuinely
+    empty file.
     """
+    import main
+    monkeypatch.setattr(main.osticket_client, "fetch_attachment_content", lambda **kwargs: None)
+
     with db_conn.begin():
         user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'External Backend User', NOW(), NOW(), 0)"))
         user_id = user_res.lastrowid
@@ -767,6 +771,87 @@ def test_list_attachments_without_stored_chunks_returns_null_content(client: Tes
     assert len(response.json()) == 1
     assert response.json()[0]["size"] == 23547
     assert response.json()[0]["content"] is None
+
+
+def test_list_attachments_uses_http_fallback_when_no_chunks(client: TestClient, db_conn, monkeypatch):
+    """
+    When a file has no ost_file_chunk rows, content is fetched via
+    osticket_client.fetch_attachment_content(), keyed by the FILE's id
+    (a.file_id / ost_file.id), not the attachment's id - a regression guard
+    for a real historical bug where the two were conflated.
+    """
+    import main
+
+    captured = {}
+
+    def fake_fetch(**kwargs):
+        captured.update(kwargs)
+        return b"fetched-bytes"
+
+    monkeypatch.setattr(main.osticket_client, "fetch_attachment_content", fake_fetch)
+
+    with db_conn.begin():
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Fallback User', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'fallback@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('FALLBACK-1', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+        thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
+        thread_id = thread_res.lastrowid
+        entry_res = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": thread_id})
+        entry_id = entry_res.lastrowid
+        file_res = db_conn.execute(text("INSERT INTO ost_file (ft, bk, type, size, name, `key`, signature, created) VALUES ('T', 'F', 'image/png', 5, 'photo.png', 'thekey', 'thehash', NOW())"))
+        file_id = file_res.lastrowid
+        attachment_res = db_conn.execute(text("INSERT INTO ost_attachment (object_id, type, file_id, inline) VALUES (:eid, 'H', :fid, 1)"), {"eid": entry_id, "fid": file_id})
+        attachment_id = attachment_res.lastrowid
+
+        api_key = "fallback-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    response = client.get(f"/attachments?ticket_ids={ticket_id}", headers={"X-API-Key": api_key})
+    assert response.status_code == 200
+    assert response.json()[0]["content"] == base64.b64encode(b"fetched-bytes").decode("ascii")
+
+    assert captured["file_id"] == file_id
+    assert captured["attachment_id"] == attachment_id
+    assert captured["key"] == "thekey"
+    assert captured["file_hash"] == "thehash"
+
+
+def test_list_attachments_prefers_db_chunks_over_http_fallback(client: TestClient, db_conn, monkeypatch):
+    """When ost_file_chunk has data, the HTTP fallback must never be called."""
+    import main
+
+    def fail_if_called(**kwargs):
+        raise AssertionError("fetch_attachment_content should not be called when DB chunks exist")
+
+    monkeypatch.setattr(main.osticket_client, "fetch_attachment_content", fail_if_called)
+
+    with db_conn.begin():
+        user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'DB Chunks User', NOW(), NOW(), 0)"))
+        user_id = user_res.lastrowid
+        email_res = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'db-chunks@example.com')"), {"uid": user_id})
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": email_res.lastrowid, "uid": user_id})
+
+        ticket_res = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('DB-CHUNKS-1', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        ticket_id = ticket_res.lastrowid
+        thread_res = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id})
+        thread_id = thread_res.lastrowid
+        entry_res = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": thread_id})
+        entry_id = entry_res.lastrowid
+        file_res = db_conn.execute(text("INSERT INTO ost_file (ft, type, size, name, `key`, signature, created) VALUES ('T', 'text/plain', 4, 'test.txt', 'key3', 'signature3', NOW())"))
+        file_id = file_res.lastrowid
+        db_conn.execute(text("INSERT INTO ost_file_chunk (file_id, chunk_id, filedata) VALUES (:fid, 0, :data)"), {"fid": file_id, "data": b"test"})
+        db_conn.execute(text("INSERT INTO ost_attachment (object_id, type, file_id, inline) VALUES (:eid, 'H', :fid, 0)"), {"eid": entry_id, "fid": file_id})
+
+        api_key = "db-chunks-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    response = client.get(f"/attachments?ticket_ids={ticket_id}", headers={"X-API-Key": api_key})
+    assert response.status_code == 200
+    assert response.json()[0]["content"] == base64.b64encode(b"test").decode("ascii")
 
 
 def test_list_attachments_not_found(client: TestClient, db_conn):
