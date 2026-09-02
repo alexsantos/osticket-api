@@ -13,6 +13,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import bindparam, create_engine, text, event
 from sqlalchemy.engine import Engine, URL
 
+import osticket_client
 from models import (AttachmentResponse, CloseResponse, DepartmentResponse, TeamResponse,
                     HealthResponse, MessageCreate, MessageResponse, NoteCreate, NoteResponse, PaginatedTicketResponse, StatusResponse,
                     TicketCreate, TicketCreateResponse, TopicResponse, UserResponse, PaginatedUserResponse, TicketItem, MessagesResponse,
@@ -129,6 +130,13 @@ async def lifespan(_app: FastAPI):
         cursor.execute("SET NAMES 'utf8mb4' COLLATE 'utf8mb4_unicode_ci'")
         cursor.close()
 
+    osticket_client.init(
+        base_url=os.getenv("OSTICKET_BASE_URL"),
+        secret_salt=os.getenv("OSTICKET_SECRET_SALT"),
+        staff_username=os.getenv("OSTICKET_STAFF_USERNAME"),
+        staff_password=os.getenv("OSTICKET_STAFF_PASSWORD"),
+    )
+
     yield
     # This code runs on shutdown
     engine.dispose()
@@ -156,7 +164,7 @@ async def verify_token(x_api_key: str = Header(...)):
             raise HTTPException(status_code=403, detail="API Key is not active")
 
 app = FastAPI(
-    title="osTicket Ultimate Python API", version="0.10.7", lifespan=lifespan
+    title="osTicket Ultimate Python API", version="0.10.8", lifespan=lifespan
 )
 
 
@@ -586,6 +594,8 @@ def _query_ticket_attachments(conn, ticket_ids: List[int]):
                    f.size,
                    a.inline,
                    f.created,
+                   f.`key`       AS file_key,
+                   f.signature   AS file_hash,
                    fc.chunk_id,
                    fc.filedata
             FROM ost_ticket t
@@ -601,26 +611,38 @@ def _query_ticket_attachments(conn, ticket_ids: List[int]):
 
     attachments = {}
     chunks = {}
+    fallback_meta = {}
     for row in results:
         attachment_id = row["attachment_id"]
         if attachment_id not in attachments:
             attachment = dict(row)
             attachment.pop("chunk_id", None)
             attachment.pop("filedata", None)
+            file_key = attachment.pop("file_key", None)
+            file_hash = attachment.pop("file_hash", None)
             attachments[attachment_id] = attachment
             chunks[attachment_id] = []
+            fallback_meta[attachment_id] = (file_key, file_hash)
         if row["filedata"] is not None:
             chunks[attachment_id].append(row["filedata"])
 
     response = []
     for attachment_id, attachment in attachments.items():
-        # No rows in ost_file_chunk means the file's bytes live in a non-database
-        # storage backend (see ost_file.bk) that this API cannot read - distinct
-        # from a genuinely empty file, so leave content unset rather than "".
-        attachment["content"] = (
-            base64.b64encode(b"".join(chunks[attachment_id])).decode("ascii")
-            if chunks[attachment_id] else None
-        )
+        if chunks[attachment_id]:
+            content_bytes = b"".join(chunks[attachment_id])
+        else:
+            # No rows in ost_file_chunk means the file's bytes live in a non-database
+            # storage backend (see ost_file.bk) - fetch them from osTicket's own
+            # web frontend instead. Returns None (-> content stays null) if the
+            # fallback isn't configured, or the fetch itself fails.
+            file_key, file_hash = fallback_meta[attachment_id]
+            content_bytes = osticket_client.fetch_attachment_content(
+                file_id=attachment["file_id"],  # a.file_id == ost_file.id via the join
+                attachment_id=attachment_id,
+                key=file_key,
+                file_hash=file_hash,
+            )
+        attachment["content"] = base64.b64encode(content_bytes).decode("ascii") if content_bytes else None
         response.append(attachment)
     return response
 
