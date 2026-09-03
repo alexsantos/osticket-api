@@ -326,6 +326,9 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
           "dept_id": 1
         }'
         ```
+    -   **Errors:**
+        -   `400` if `user_id` does not exist.
+        -   `422` if `message` exceeds 65535 characters (osTicket stores it in a `TEXT` column).
 
 -   **POST /tickets/{ticket_id}/messages/{entry_id}/attachments**
     -   **Description:** Attaches a file to an existing message of an existing ticket.
@@ -357,6 +360,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -   `poster` (optional, default: `"API"`): The display name attributed as the note's author.
     -   **Errors:**
         -   `404` if the ticket does not exist.
+        -   `422` if `body` exceeds 65535 characters (osTicket stores it in a `TEXT` column).
     -   **Example:**
         ```bash
         curl -X POST "http://localhost:8080/tickets/123/notes" \
@@ -389,6 +393,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         ```
     -   **Errors:**
         -   `404` if the ticket does not exist or has no thread.
+        -   `422` if `body` exceeds 65535 characters (osTicket stores it in a `TEXT` column).
     -   **Example:**
         ```bash
         curl -X POST "http://localhost:8080/tickets/123/messages" \
@@ -465,6 +470,7 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
     -   **Errors:**
         -   `400` if neither `title` nor `body` is provided.
         -   `404` if the ticket or message entry does not exist.
+        -   `422` if `body` exceeds 65535 characters (osTicket stores it in a `TEXT` column).
     -   **Example:**
         ```bash
         curl -X PATCH "http://localhost:8080/tickets/123/messages/456" \
