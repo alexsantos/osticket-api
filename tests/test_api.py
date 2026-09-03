@@ -380,6 +380,18 @@ def test_create_ticket_invalid_user(client: TestClient, db_conn):
     assert response.status_code == 400
 
 
+def test_create_ticket_message_too_long(client: TestClient, db_conn):
+    with db_conn.begin():
+        api_key = "message-too-long-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    headers = {"X-API-Key": api_key}
+    ticket_data = {"user_id": 1, "subject": "Test", "message": "x" * 65536}
+
+    response = client.post("/tickets", headers=headers, json=ticket_data)
+    assert response.status_code == 422
+
+
 def test_create_ticket_internal_error(client: TestClient, db_conn, monkeypatch):
     with db_conn.begin():
         user_res = db_conn.execute(text(
@@ -977,6 +989,16 @@ def test_add_note_to_ticket_via_notes_endpoint(client: TestClient, db_conn):
     assert row["body"] == "Note via the new endpoint."
 
 
+def test_add_note_body_too_long(client: TestClient, db_conn):
+    with db_conn.begin():
+        api_key = "note-too-long-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    headers = {"X-API-Key": api_key}
+    response = client.post("/tickets/1/notes", headers=headers, json={"body": "x" * 65536})
+    assert response.status_code == 422
+
+
 def test_add_message_to_ticket_returns_thread_and_entry_ids(client: TestClient, db_conn):
     with db_conn.begin():
         user_res = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Message User', NOW(), NOW(), 0)"))
@@ -1041,6 +1063,16 @@ def test_add_message_via_messages_endpoint(client: TestClient, db_conn):
     assert row["thread_id"] == thread_id
     assert row["type"] == "M"
     assert row["body"] == "Sent via the new endpoint."
+
+
+def test_add_message_body_too_long(client: TestClient, db_conn):
+    with db_conn.begin():
+        api_key = "message-too-long-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    headers = {"X-API-Key": api_key}
+    response = client.post("/tickets/1/messages", headers=headers, json={"body": "x" * 65536})
+    assert response.status_code == 422
 
 
 def test_add_note_default_poster(client: TestClient, db_conn):
@@ -1318,6 +1350,15 @@ def test_update_ticket_message_entry_requires_title_or_body(client: TestClient, 
 
     response = client.put("/tickets/1/messages/1", headers={"X-API-Key": api_key}, json={})
     assert response.status_code == 400
+
+
+def test_update_ticket_message_entry_body_too_long(client: TestClient, db_conn):
+    with db_conn.begin():
+        api_key = "ticket-update-entry-too-long-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    response = client.put("/tickets/1/messages/1", headers={"X-API-Key": api_key}, json={"body": "x" * 65536})
+    assert response.status_code == 422
 
 
 def test_update_ticket_attachment(client: TestClient, db_conn):

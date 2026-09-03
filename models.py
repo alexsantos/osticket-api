@@ -1,27 +1,33 @@
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+# osTicket stores thread entry bodies (messages, notes, and a ticket's
+# initial message) in ost_thread_entry.body, a MySQL TEXT column - max
+# 65535 bytes. Without this, an oversized body reaches the DB and fails
+# there, surfacing as a generic 500 instead of a clean 422.
+MAX_THREAD_ENTRY_BODY_LENGTH = 65535
 
 
 # --- Request Models ---
 class TicketCreate(BaseModel):
     user_id: int
     subject: str
-    message: str
+    message: str = Field(max_length=MAX_THREAD_ENTRY_BODY_LENGTH)
     topic_id: Optional[int] = None
     dept_id: Optional[int] = None
 
 
 class NoteCreate(BaseModel):
-    body: str
+    body: str = Field(max_length=MAX_THREAD_ENTRY_BODY_LENGTH)
     title: Optional[str] = None
     poster: Optional[str] = "API"
 
 
 class MessageCreate(BaseModel):
     type: Optional[str] = "M"
-    body: str
+    body: str = Field(max_length=MAX_THREAD_ENTRY_BODY_LENGTH)
     title: Optional[str] = None
     poster: Optional[str] = "API"
 
@@ -40,7 +46,7 @@ class TeamUpdateRequest(BaseModel):
 
 class MessageUpdateRequest(BaseModel):
     title: Optional[str] = None
-    body: Optional[str] = None
+    body: Optional[str] = Field(None, max_length=MAX_THREAD_ENTRY_BODY_LENGTH)
 
 
 # --- Response Models ---
