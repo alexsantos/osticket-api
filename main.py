@@ -164,7 +164,7 @@ async def verify_token(x_api_key: str = Header(...)):
             raise HTTPException(status_code=403, detail="API Key is not active")
 
 app = FastAPI(
-    title="osTicket Ultimate Python API", version="0.10.8", lifespan=lifespan
+    title="osTicket Ultimate Python API", version="0.10.9", lifespan=lifespan
 )
 
 
