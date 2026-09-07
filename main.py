@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import logging
 import os
 from datetime import datetime
 from typing import List, Optional
@@ -20,6 +21,8 @@ from models import (AttachmentResponse, CloseResponse, DepartmentResponse, TeamR
                     StatusUpdateRequest, DepartmentUpdateRequest, TeamUpdateRequest, MessageUpdateRequest,
                     UpdateResponse, AttachmentsResponse)
 from utils import build_pagination_urls, CommaSeparatedInts
+
+logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_MB: int = 10
 MAX_UPLOAD_BYTES: int = MAX_UPLOAD_MB * 1024 * 1024
@@ -164,20 +167,32 @@ async def verify_token(x_api_key: str = Header(...)):
             raise HTTPException(status_code=403, detail="API Key is not active")
 
 app = FastAPI(
-    title="osTicket Ultimate Python API", version="0.10.9", lifespan=lifespan
+    title="osTicket Ultimate Python API", version="0.10.10", lifespan=lifespan
 )
 
 
 # --- HEALTH CHECK ---
 @app.get("/health", tags=["Health Check"], response_model=HealthResponse)
 def health_check():
-    """Checks the health of the API and its database connection."""
+    """
+    Checks the health of the API and its database connection.
+
+    Always returns HTTP 200, even when the database is unreachable: the
+    process itself is fine in that case, and this endpoint doubles as Cloud
+    Run's Startup probe. A non-2xx status here makes Cloud Run treat a
+    database outage as "this container is broken" and refuse to start/route
+    traffic to it - restarting the container won't fix an external database
+    outage. Check the `database` field in the body for the real status; the
+    underlying error, if any, goes to the logs rather than the response body
+    since this endpoint requires no authentication.
+    """
     try:
         with _get_engine().connect() as conn:
             conn.execute(text("SELECT 1"))
         return {"status": "ok", "database": "ok"}
     except Exception as e:
-        raise HTTPException(status_code=503, detail={"status": "error", "database": "error", "details": str(e)}) from e
+        logger.warning("Health check: database unreachable: %s", e)
+        return {"status": "degraded", "database": "error"}
 
 
 # --- AUXILIARY LISTING ENDPOINTS ---

@@ -17,13 +17,21 @@ def test_health_check(client: TestClient):
 
 
 def test_health_check_db_error(client: TestClient, monkeypatch):
+    """
+    /health must always return 200, even when the database is unreachable:
+    it doubles as Cloud Run's Startup probe, and a non-2xx status there would
+    make Cloud Run refuse to start/route traffic to the container over an
+    external DB outage a restart can't fix. The failure must still be
+    reflected in the body (`database: "error"`), just not leaked into it as
+    raw exception text - that goes to the logs instead.
+    """
     from main import engine
     def mock_connect_error():
         raise exc.OperationalError("Connection failed", {}, "Mocked error")
     monkeypatch.setattr(engine, "connect", mock_connect_error)
     response = client.get("/health")
-    assert response.status_code == 503
-    assert "Mocked error" in response.json()["detail"]["details"]
+    assert response.status_code == 200
+    assert response.json() == {"status": "degraded", "database": "error"}
 
 
 def test_security_no_api_key(client: TestClient):
