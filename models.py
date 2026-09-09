@@ -162,6 +162,7 @@ class AttachmentsResponse(BaseModel):
     size: int
     inline: int
     created: datetime
+    cid: Optional[str] = None
     content: Optional[str] = None
 
 
