@@ -635,6 +635,12 @@ def _query_ticket_attachments(conn, ticket_ids: List[int]):
             attachment.pop("filedata", None)
             file_key = attachment.pop("file_key", None)
             file_hash = attachment.pop("file_hash", None)
+            # osTicket rewrites inline <img src="cid:..."> references in the
+            # message body to the attachment's file key, lowercased (see
+            # osTicket's Thread::importMessage()). Exposing that same
+            # lowercased value here lets API consumers match an attachment
+            # back to the "cid:<value>" it's referenced by in the message HTML.
+            attachment["cid"] = file_key.lower() if file_key else None
             attachments[attachment_id] = attachment
             chunks[attachment_id] = []
             fallback_meta[attachment_id] = (file_key, file_hash)
