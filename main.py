@@ -167,7 +167,7 @@ async def verify_token(x_api_key: str = Header(...)):
             raise HTTPException(status_code=403, detail="API Key is not active")
 
 app = FastAPI(
-    title="osTicket Ultimate Python API", version="0.10.11", lifespan=lifespan
+    title="osTicket Ultimate Python API", version="0.10.12", lifespan=lifespan
 )
 
 
@@ -442,6 +442,13 @@ def list_tickets(
 
         total_records = conn.execute(text(count_sql), params).scalar_one()
 
+        # Deferred join: the inner query applies the filters and picks only the
+        # requested page of (ticket, email) rows, so the display joins - notably
+        # the first-message lookup and its TEXT body - run for `limit` rows only.
+        # Joining them before the LIMIT made MariaDB build and filesort every
+        # matching ticket, which took about a minute on large databases.
+        # The inner query keeps the original joins (and so its row multiplicity),
+        # and the outer query rejoins each row's own email via ue.id.
         data_sql = f"""
             SELECT t.ticket_id,
                    t.number, 
@@ -460,10 +467,21 @@ def list_tickets(
                    team.name as team_name,
                    te.title   as subject,
                    te.body    as message
-            FROM ost_ticket t
+            FROM (
+                SELECT t.ticket_id, ue.id as user_email_id, t.created
+                FROM ost_ticket t
+                JOIN ost_ticket_status s ON t.status_id = s.id
+                JOIN ost_user u ON t.user_id = u.id
+                JOIN ost_user_email ue ON u.id = ue.user_id
+                {custom_field_joins}
+                {where_clause}
+                ORDER BY t.created DESC, t.ticket_id DESC
+                LIMIT :limit OFFSET :offset
+            ) page
+            JOIN ost_ticket t ON t.ticket_id = page.ticket_id
             JOIN ost_ticket_status s ON t.status_id = s.id
             JOIN ost_user u ON t.user_id = u.id
-            JOIN ost_user_email ue ON u.id = ue.user_id
+            JOIN ost_user_email ue ON ue.id = page.user_email_id
             LEFT JOIN ost_help_topic ht ON t.topic_id = ht.topic_id
             LEFT JOIN ost_department d ON t.dept_id = d.id
             LEFT JOIN ost_team team ON t.team_id = team.team_id
@@ -471,10 +489,7 @@ def list_tickets(
             LEFT JOIN ost_thread_entry te ON te.id = (
                              SELECT MIN(id) FROM ost_thread_entry WHERE thread_id = th.id
                          )
-            {custom_field_joins}
-            {where_clause}
-            ORDER BY t.created DESC, t.ticket_id DESC
-            LIMIT :limit OFFSET :offset
+            ORDER BY page.created DESC, page.ticket_id DESC
         """
 
         params["limit"] = limit
