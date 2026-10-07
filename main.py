@@ -449,6 +449,14 @@ def list_tickets(
         # matching ticket, which took about a minute on large databases.
         # The inner query keeps the original joins (and so its row multiplicity),
         # and the outer query rejoins each row's own email via ue.id.
+        #
+        # STRAIGHT_JOIN makes ost_ticket the driving table so the page is read
+        # straight off the `created` index and the scan stops after `limit` rows.
+        # Without it, older optimizers (MariaDB 5.5) start from ost_user and
+        # filesort every ticket (seconds on 235k tickets vs 0.02s). The `email`
+        # filter is the exception: it is most selective via the unique
+        # ost_user_email.address key, so the optimizer keeps choosing the order.
+        page_join_hint = "" if email else "STRAIGHT_JOIN"
         data_sql = f"""
             SELECT t.ticket_id,
                    t.number, 
@@ -468,7 +476,7 @@ def list_tickets(
                    te.title   as subject,
                    te.body    as message
             FROM (
-                SELECT t.ticket_id, ue.id as user_email_id, t.created
+                SELECT {page_join_hint} t.ticket_id, ue.id as user_email_id, t.created
                 FROM ost_ticket t
                 JOIN ost_ticket_status s ON t.status_id = s.id
                 JOIN ost_user u ON t.user_id = u.id
