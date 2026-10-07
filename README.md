@@ -36,6 +36,16 @@ To run this application, you need to configure the following environment variabl
 
 - `ROOT_PATH`: Sub-path the API is mounted under behind a reverse proxy (e.g. `/osticket-dop`). Leave empty when serving from the domain root. The proxy must strip this prefix before forwarding requests to the container; this variable only makes generated URLs (docs, redirects) resolve correctly. Defaults to `` (empty).
 
+## Recommended Database Index
+
+`GET /tickets` filters on `ost_ticket.updated` (`updated_after` / `updated_before`), which stock osTicket does not index, so those filters scan the whole ticket table. On large databases, add the index once with [`sql/add_ticket_updated_index.sql`](sql/add_ticket_updated_index.sql), run as a database user with `ALTER` privilege:
+
+```bash
+mariadb -h <DB_HOST> -u <admin_user> -p <DB_NAME> < sql/add_ticket_updated_index.sql
+```
+
+The script is idempotent and builds the index online, without blocking reads or writes.
+
 ## API Keys
 
 This API uses the API keys configured within your osTicket installation. To create and manage API keys, log in to your osTicket admin panel and navigate to `Admin Panel > Manage > API Keys`.
