@@ -1836,3 +1836,103 @@ def test_list_messages_missing_ticket_ids(client: TestClient, db_conn):
 
     response = client.get("/messages", headers={"X-API-Key": api_key})
     assert response.status_code == 422
+
+
+def _seed_tickets_with_threads(db_conn, count):
+    """Seeds `count` open tickets, each with a thread holding two entries."""
+    db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, mode, flags, properties, created, updated) VALUES (1, 'Open', 'open', 3, 0, '{}', NOW(), NOW())"))
+    user_id = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Bulk User', NOW(), NOW(), 0)")).lastrowid
+    db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'bulk@example.com')"), {"uid": user_id})
+    now = datetime.now()
+    for i in range(count):
+        ticket_id = db_conn.execute(
+            text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES (:num, :uid, 1, :ct, :ct)"),
+            {"num": f"BULK-{i:03d}", "uid": user_id, "ct": now - timedelta(minutes=i)},
+        ).lastrowid
+        thread_id = db_conn.execute(
+            text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id}
+        ).lastrowid
+        for title in (f"Subject {i}", f"Reply {i}"):
+            db_conn.execute(
+                text("INSERT INTO ost_thread_entry (thread_id, type, title, body, created, updated) VALUES (:th, 'M', :title, 'body', NOW(), NOW())"),
+                {"th": thread_id, "title": title},
+            )
+
+
+def _max_r_loops(node, table_name):
+    """Largest `r_loops` reported for `table_name` anywhere in an ANALYZE FORMAT=JSON plan."""
+    found = 0
+    if isinstance(node, dict):
+        if node.get("table_name") == table_name:
+            found = node.get("r_loops", 0)
+        for value in node.values():
+            found = max(found, _max_r_loops(value, table_name))
+    elif isinstance(node, list):
+        for value in node:
+            found = max(found, _max_r_loops(value, table_name))
+    return found
+
+
+def test_list_tickets_fetches_first_message_only_for_the_page(client: TestClient, db_conn):
+    """
+    Regression test for GET /tickets taking about a minute on large databases.
+    The data query used to join every matching ticket (including its first
+    message's TEXT body) and filesort them all before applying LIMIT. The
+    first-message lookup must run only for the tickets on the requested page,
+    not once per matching ticket.
+    """
+    import json
+    from sqlalchemy import event
+    import main as main_module
+
+    with db_conn.begin():
+        _seed_tickets_with_threads(db_conn, 30)
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', 'bulk-key', NOW(), NOW())"))
+
+    statements = []
+
+    def capture(_conn, _cursor, statement, parameters, _context, _executemany):
+        statements.append((statement, parameters))
+
+    app_engine = main_module.engine
+    event.listen(app_engine, "before_cursor_execute", capture)
+    try:
+        response = client.get("/tickets?limit=5&offset=10", headers={"X-API-Key": "bulk-key"})
+    finally:
+        event.remove(app_engine, "before_cursor_execute", capture)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 30
+    assert [item["number"] for item in data["items"]] == [f"BULK-{i:03d}" for i in range(10, 15)]
+    assert [item["subject"] for item in data["items"]] == [f"Subject {i}" for i in range(10, 15)]
+
+    data_sql, data_params = next((s, p) for s, p in statements if "ost_thread_entry" in s)
+    plan = json.loads(db_conn.exec_driver_sql("ANALYZE FORMAT=JSON " + data_sql, data_params).scalar_one())
+    db_conn.rollback()
+    # `te` is the first-message join: it must be probed once per page row.
+    assert _max_r_loops(plan, "te") == 5
+
+
+def test_list_tickets_user_with_multiple_emails(client: TestClient, db_conn):
+    """A user with several emails yields one row per email, each carrying its own address."""
+    with db_conn.begin():
+        db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, mode, flags, properties, created, updated) VALUES (1, 'Open', 'open', 3, 0, '{}', NOW(), NOW())"))
+        user_id = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Two Emails', NOW(), NOW(), 0)")).lastrowid
+        db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'first@example.com')"), {"uid": user_id})
+        db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'second@example.com')"), {"uid": user_id})
+        db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('MULTI-1', :uid, 1, NOW(), NOW())"), {"uid": user_id})
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', 'multi-email-key', NOW(), NOW())"))
+
+    headers = {"X-API-Key": "multi-email-key"}
+
+    response = client.get("/tickets", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 2
+    assert sorted(item["user_email"] for item in data["items"]) == ["first@example.com", "second@example.com"]
+
+    response = client.get("/tickets?email=second@example.com", headers=headers)
+    data = response.json()
+    assert data["total"] == 1
+    assert data["items"][0]["user_email"] == "second@example.com"
