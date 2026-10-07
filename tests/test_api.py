@@ -1936,3 +1936,24 @@ def test_list_tickets_user_with_multiple_emails(client: TestClient, db_conn):
     data = response.json()
     assert data["total"] == 1
     assert data["items"][0]["user_email"] == "second@example.com"
+
+
+def test_add_ticket_updated_index_script(db_conn):
+    """
+    sql/add_ticket_updated_index.sql must create the `api_updated` index on
+    ost_ticket.updated and be safe to run more than once.
+    """
+    from pathlib import Path
+
+    script = (Path(__file__).parent.parent / "sql" / "add_ticket_updated_index.sql").read_text()
+    try:
+        db_conn.exec_driver_sql(script)
+        db_conn.exec_driver_sql(script)  # Re-running must be a no-op, not an error.
+        index_columns = db_conn.execute(
+            text("SHOW INDEX FROM ost_ticket WHERE Key_name = 'api_updated'")
+        ).mappings().all()
+        assert [row["Column_name"] for row in index_columns] == ["updated"]
+    finally:
+        # Keep the shared test schema identical to stock osTicket for other tests.
+        db_conn.exec_driver_sql("ALTER TABLE ost_ticket DROP INDEX IF EXISTS api_updated")
+        db_conn.rollback()

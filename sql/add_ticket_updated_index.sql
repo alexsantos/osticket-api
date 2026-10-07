@@ -1,0 +1,15 @@
+-- Index on ost_ticket.updated for GET /tickets?updated_after=...&updated_before=...
+--
+-- Stock osTicket indexes ost_ticket.created but not ost_ticket.updated, so the
+-- date filters scan the whole ticket table. Run this once per osTicket database
+-- as a user with ALTER privilege on ost_ticket (the API's own user only needs
+-- read/write access and must not run DDL).
+--
+-- Safe to run on a live database: the index is built in place without blocking
+-- reads or writes (ALGORITHM=INPLACE, LOCK=NONE), and IF NOT EXISTS makes it
+-- idempotent. The distinctive name `api_updated` avoids clashing with any index
+-- a future osTicket upgrade might add.
+--
+-- Requires MariaDB 10.0.2+ (IF NOT EXISTS). On MySQL, drop `IF NOT EXISTS` and
+-- check `SHOW INDEX FROM ost_ticket` first.
+ALTER TABLE ost_ticket ADD INDEX IF NOT EXISTS api_updated (updated), ALGORITHM=INPLACE, LOCK=NONE;
