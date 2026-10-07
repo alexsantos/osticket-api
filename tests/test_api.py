@@ -1983,9 +1983,16 @@ def test_add_ticket_updated_index_script(db_conn):
     from pathlib import Path
 
     script = (Path(__file__).parent.parent / "sql" / "add_ticket_updated_index.sql").read_text()
+    sql = "\n".join(line for line in script.splitlines() if not line.startswith("--"))
+    statements = [statement.strip() for statement in sql.split(";") if statement.strip()]
+
+    def run_script():
+        for statement in statements:
+            db_conn.exec_driver_sql(statement)
+
     try:
-        db_conn.exec_driver_sql(script)
-        db_conn.exec_driver_sql(script)  # Re-running must be a no-op, not an error.
+        run_script()
+        run_script()  # Re-running must be a no-op, not an error.
         index_columns = db_conn.execute(
             text("SHOW INDEX FROM ost_ticket WHERE Key_name = 'api_updated'")
         ).mappings().all()

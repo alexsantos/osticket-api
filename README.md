@@ -44,7 +44,7 @@ To run this application, you need to configure the following environment variabl
 mariadb -h <DB_HOST> -u <admin_user> -p <DB_NAME> < sql/add_ticket_updated_index.sql
 ```
 
-The script is idempotent and builds the index online, without blocking reads or writes.
+The script works on MariaDB 5.5+ and MySQL 5.5+ and is safe to run more than once. MariaDB 10.0+ and MySQL 5.6+ build the index without blocking reads or writes; on 5.5, writes to `ost_ticket` are blocked for the few seconds the build takes.
 
 ## API Keys
 
