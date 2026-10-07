@@ -1859,6 +1859,33 @@ def _seed_tickets_with_threads(db_conn, count):
             )
 
 
+def _get_with_data_query(client, url, api_key):
+    """GETs `url` and returns (response, (statement, params)) of the GET /tickets data query it ran."""
+    from sqlalchemy import event
+    import main as main_module
+
+    statements = []
+
+    def capture(_conn, _cursor, statement, parameters, _context, _executemany):
+        statements.append((statement, parameters))
+
+    # The app's lifespan creates its own engine, so listen on that one.
+    app_engine = main_module.engine
+    event.listen(app_engine, "before_cursor_execute", capture)
+    try:
+        response = client.get(url, headers={"X-API-Key": api_key})
+    finally:
+        event.remove(app_engine, "before_cursor_execute", capture)
+    return response, next((s, p) for s, p in statements if "ost_thread_entry" in s)
+
+
+def _page_query_join_order(db_conn, data_sql, data_params):
+    """Table aliases of the data query's inner page subquery (the DERIVED block), in join order."""
+    rows = db_conn.exec_driver_sql("EXPLAIN " + data_sql, data_params).mappings().all()
+    db_conn.rollback()
+    return [row["table"] for row in rows if row["select_type"] == "DERIVED"]
+
+
 def _max_r_loops(node, table_name):
     """Largest `r_loops` reported for `table_name` anywhere in an ANALYZE FORMAT=JSON plan."""
     found = 0
@@ -1882,24 +1909,12 @@ def test_list_tickets_fetches_first_message_only_for_the_page(client: TestClient
     not once per matching ticket.
     """
     import json
-    from sqlalchemy import event
-    import main as main_module
 
     with db_conn.begin():
         _seed_tickets_with_threads(db_conn, 30)
         db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', 'bulk-key', NOW(), NOW())"))
 
-    statements = []
-
-    def capture(_conn, _cursor, statement, parameters, _context, _executemany):
-        statements.append((statement, parameters))
-
-    app_engine = main_module.engine
-    event.listen(app_engine, "before_cursor_execute", capture)
-    try:
-        response = client.get("/tickets?limit=5&offset=10", headers={"X-API-Key": "bulk-key"})
-    finally:
-        event.remove(app_engine, "before_cursor_execute", capture)
+    response, (data_sql, data_params) = _get_with_data_query(client, "/tickets?limit=5&offset=10", "bulk-key")
 
     assert response.status_code == 200
     data = response.json()
@@ -1907,11 +1922,33 @@ def test_list_tickets_fetches_first_message_only_for_the_page(client: TestClient
     assert [item["number"] for item in data["items"]] == [f"BULK-{i:03d}" for i in range(10, 15)]
     assert [item["subject"] for item in data["items"]] == [f"Subject {i}" for i in range(10, 15)]
 
-    data_sql, data_params = next((s, p) for s, p in statements if "ost_thread_entry" in s)
     plan = json.loads(db_conn.exec_driver_sql("ANALYZE FORMAT=JSON " + data_sql, data_params).scalar_one())
     db_conn.rollback()
     # `te` is the first-message join: it must be probed once per page row.
     assert _max_r_loops(plan, "te") == 5
+
+
+def test_list_tickets_page_is_driven_by_ticket_table(client: TestClient, db_conn):
+    """
+    Regression test for unfiltered GET /tickets polling taking seconds on
+    MariaDB 5.5: its optimizer drove the page query from ost_user and
+    filesorted every ticket. The page query must read ost_ticket first (so the
+    `created` index serves ORDER BY ... LIMIT), except with the `email` filter,
+    where the unique ost_user_email.address key is the selective starting point.
+    """
+    with db_conn.begin():
+        _seed_tickets_with_threads(db_conn, 30)
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', 'driver-key', NOW(), NOW())"))
+
+    response, (data_sql, data_params) = _get_with_data_query(client, "/tickets?limit=5", "driver-key")
+    assert response.status_code == 200
+    assert [item["number"] for item in response.json()["items"]] == [f"BULK-{i:03d}" for i in range(5)]
+    assert _page_query_join_order(db_conn, data_sql, data_params)[0] == "t"
+
+    response, (data_sql, data_params) = _get_with_data_query(client, "/tickets?limit=5&email=bulk@example.com", "driver-key")
+    assert response.status_code == 200
+    assert response.json()["total"] == 30
+    assert _page_query_join_order(db_conn, data_sql, data_params)[0] == "ue"
 
 
 def test_list_tickets_user_with_multiple_emails(client: TestClient, db_conn):
