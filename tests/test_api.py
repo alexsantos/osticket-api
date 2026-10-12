@@ -1975,6 +1975,44 @@ def test_list_tickets_user_with_multiple_emails(client: TestClient, db_conn):
     assert data["items"][0]["user_email"] == "second@example.com"
 
 
+def test_user_without_email(client: TestClient, db_conn):
+    """A user with no ost_user_email row, and their tickets, are still returned, with a null email."""
+    with db_conn.begin():
+        db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, mode, flags, properties, created, updated) VALUES (1, 'Open', 'open', 3, 0, '{}', NOW(), NOW())"))
+        user_id = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'No Email', NOW(), NOW(), 0)")).lastrowid
+        ticket_id = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES ('NOEMAIL-1', :uid, 1, NOW(), NOW())"), {"uid": user_id}).lastrowid
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', 'no-email-key', NOW(), NOW())"))
+
+    headers = {"X-API-Key": "no-email-key"}
+
+    response = client.get("/users", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["items"][0]["id"] == user_id
+    assert data["items"][0]["email"] is None
+
+    response = client.get(f"/users/{user_id}", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["email"] is None
+
+    response = client.get("/tickets", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["items"][0]["ticket_id"] == ticket_id
+    assert data["items"][0]["user_email"] is None
+
+    response = client.get(f"/tickets/{ticket_id}", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["user_email"] is None
+
+    # The email filter must still exclude users without an email.
+    response = client.get("/tickets?email=someone@example.com", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["total"] == 0
+
+
 def test_add_ticket_updated_index_script(db_conn):
     """
     sql/add_ticket_updated_index.sql must create the `api_updated` index on
