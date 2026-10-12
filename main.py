@@ -268,7 +268,7 @@ def list_users(
         count_sql = f"""
             SELECT COUNT(u.id)
             FROM ost_user u
-            JOIN ost_user_email ue ON u.id = ue.user_id
+            LEFT JOIN ost_user_email ue ON u.id = ue.user_id
             {where_clause}
         """
         total_records = conn.execute(text(count_sql), params).scalar_one()
@@ -278,7 +278,7 @@ def list_users(
         data_sql = f"""
             SELECT u.id, u.name, ue.address as email, u.created, u.updated
             FROM ost_user u
-            JOIN ost_user_email ue ON u.id = ue.user_id
+            LEFT JOIN ost_user_email ue ON u.id = ue.user_id
             {where_clause}
             ORDER BY u.created DESC, u.id DESC
             LIMIT :limit OFFSET :offset
@@ -308,7 +308,7 @@ def get_user(user_id: int):
         query = """
                 SELECT u.id, u.name, ue.address as email, u.created, u.updated
                 FROM ost_user u
-                         JOIN ost_user_email ue ON u.id = ue.user_id
+                         LEFT JOIN ost_user_email ue ON u.id = ue.user_id
                 WHERE u.id = :user_id
                 """
         result = conn.execute(text(query), {"user_id": user_id}).mappings().first()
@@ -435,7 +435,7 @@ def list_tickets(
             SELECT COUNT(t.ticket_id)
             FROM ost_ticket t
             JOIN ost_user u ON t.user_id = u.id
-            JOIN ost_user_email ue ON u.id = ue.user_id
+            LEFT JOIN ost_user_email ue ON u.id = ue.user_id
             {custom_field_joins}
             {where_clause}
         """
@@ -480,7 +480,7 @@ def list_tickets(
                 FROM ost_ticket t
                 JOIN ost_ticket_status s ON t.status_id = s.id
                 JOIN ost_user u ON t.user_id = u.id
-                JOIN ost_user_email ue ON u.id = ue.user_id
+                LEFT JOIN ost_user_email ue ON u.id = ue.user_id
                 {custom_field_joins}
                 {where_clause}
                 ORDER BY t.created DESC, t.ticket_id DESC
@@ -489,7 +489,7 @@ def list_tickets(
             JOIN ost_ticket t ON t.ticket_id = page.ticket_id
             JOIN ost_ticket_status s ON t.status_id = s.id
             JOIN ost_user u ON t.user_id = u.id
-            JOIN ost_user_email ue ON ue.id = page.user_email_id
+            LEFT JOIN ost_user_email ue ON ue.id = page.user_email_id
             LEFT JOIN ost_help_topic ht ON t.topic_id = ht.topic_id
             LEFT JOIN ost_department d ON t.dept_id = d.id
             LEFT JOIN ost_team team ON t.team_id = team.team_id
@@ -769,7 +769,7 @@ def get_ticket(ticket_id: int):
                 FROM ost_ticket t
                          JOIN ost_ticket_status s ON t.status_id = s.id
                          JOIN ost_user u ON t.user_id = u.id
-                         JOIN ost_user_email ue ON u.id = ue.user_id
+                         LEFT JOIN ost_user_email ue ON u.id = ue.user_id
                          LEFT JOIN ost_help_topic ht ON t.topic_id = ht.topic_id
                          LEFT JOIN ost_department d ON t.dept_id = d.id
                          LEFT JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
