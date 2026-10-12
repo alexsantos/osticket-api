@@ -98,7 +98,7 @@ class StatusResponse(BaseModel):
 class UserResponse(BaseModel):
     id: int
     name: str
-    email: str
+    email: Optional[str] = None
     created: datetime
     updated: Optional[datetime] = None
 
@@ -126,7 +126,7 @@ class TicketItem(BaseModel):
     team_name: Optional[str] = None
     user_id: int
     user_name: str
-    user_email: str
+    user_email: Optional[str] = None
     subject: Optional[str] = None
     message: Optional[str] = None
     closed: Optional[datetime] = None
