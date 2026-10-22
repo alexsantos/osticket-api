@@ -167,7 +167,7 @@ async def verify_token(x_api_key: str = Header(...)):
             raise HTTPException(status_code=403, detail="API Key is not active")
 
 app = FastAPI(
-    title="osTicket Ultimate Python API", version="0.10.16", lifespan=lifespan
+    title="osTicket Ultimate Python API", version="0.10.17", lifespan=lifespan
 )
 
 
@@ -197,11 +197,27 @@ def health_check():
 
 # --- AUXILIARY LISTING ENDPOINTS ---
 
+# osTicket's Topic::FLAG_ACTIVE bit in ost_help_topic.flags
+TOPIC_FLAG_ACTIVE = 0x0002
+
+
+def _help_topic_has_isactive(conn) -> bool:
+    """
+    Older osTicket schemas track topic status in `ost_help_topic.isactive`; newer ones dropped
+    that column and use the FLAG_ACTIVE bit in `flags` instead.
+    """
+    return conn.execute(text("SHOW COLUMNS FROM ost_help_topic LIKE 'isactive'")).first() is not None
+
+
 @app.get("/topics", dependencies=[Depends(verify_token)], tags=["Listings"], response_model=List[TopicResponse])
 def list_help_topics():
     """Lists active Help Topics (e.g., General Support, Sales)."""
     with _get_engine().connect() as conn:
-        query = text("SELECT topic_id, topic, ispublic FROM ost_help_topic WHERE isactive = 1 ORDER BY topic ASC")
+        if _help_topic_has_isactive(conn):
+            active_clause = "isactive = 1"
+        else:
+            active_clause = f"(flags & {TOPIC_FLAG_ACTIVE}) != 0"
+        query = text(f"SELECT topic_id, topic, ispublic FROM ost_help_topic WHERE {active_clause} ORDER BY topic ASC")
         results = conn.execute(query).mappings().all()
         return [dict(row) for row in results]
 

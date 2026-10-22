@@ -73,6 +73,23 @@ def test_list_help_topics(client: TestClient, db_conn):
     assert {t["topic_id"] for t in topics} == {1, 2}
 
 
+def test_list_help_topics_uses_flags_without_isactive_column(client: TestClient, db_conn, monkeypatch):
+    """Newer osTicket schemas have no `isactive` column; active state lives in the FLAG_ACTIVE bit of `flags`."""
+    import main
+    monkeypatch.setattr(main, "_help_topic_has_isactive", lambda conn: False)
+    with db_conn.begin():
+        db_conn.execute(text("INSERT INTO ost_help_topic (topic_id, ispublic, noautoresp, topic, created, updated, flags) VALUES (1, 1, 0, 'Active Topic', NOW(), NOW(), 2)"))
+        db_conn.execute(text("INSERT INTO ost_help_topic (topic_id, ispublic, noautoresp, topic, created, updated, flags) VALUES (2, 1, 0, 'Active Custom Numbers', NOW(), NOW(), 3)"))
+        db_conn.execute(text("INSERT INTO ost_help_topic (topic_id, ispublic, noautoresp, topic, created, updated, flags) VALUES (3, 1, 0, 'Archived Topic', NOW(), NOW(), 4)"))
+        db_conn.execute(text("INSERT INTO ost_help_topic (topic_id, ispublic, noautoresp, topic, created, updated, flags) VALUES (4, 1, 0, 'Disabled Topic', NOW(), NOW(), 0)"))
+        api_key = "topics-flags-test-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+
+    response = client.get("/topics", headers={"X-API-Key": api_key})
+    assert response.status_code == 200
+    assert {t["topic_id"] for t in response.json()} == {1, 2}
+
+
 def test_list_departments(client: TestClient, db_conn):
     with db_conn.begin():
         db_conn.execute(text("INSERT INTO ost_department (id, name, signature, ispublic, created, updated) VALUES (1, 'Support', '', 1, NOW(), NOW())"))
