@@ -240,6 +240,19 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
             curl -X GET "http://localhost:8080/tickets?EFR=Médis,Multicare" -H "X-API-Key: your_osTicket_api_key"
             ```
 
+-   **GET /tickets/export**
+    -   **Description:** Exports every matching ticket in a single streamed response, for batch jobs that need all tickets. Paging through `GET /tickets` for this costs a count and a deeper offset scan on every page; the export reads tickets in internal batches by `ticket_id` instead, so it is the same speed from the first ticket to the last.
+    -   **Query Parameters:** The same filters as `GET /tickets` (`status_id`, `topic_id`, `dept_id`, `email`, `updated_after`, `updated_before` and custom fields), without `limit` / `offset`.
+    -   **Response Data:**
+        -   Newline-delimited JSON (`application/x-ndjson`): one ticket per line, with the same fields as a `GET /tickets` item. Read it line by line as it arrives instead of loading the whole body.
+        -   Tickets are ordered by `ticket_id`, and each appears once, with its user's default email address (`GET /tickets` returns one row per email address of the ticket's user).
+        -   A failure partway through cuts the connection instead of returning an error status, which HTTP clients report as an incomplete response. Treat it as a failed export and retry.
+    -   **Deployment:** the whole export is one request, so the platform's request timeout must cover it (on Cloud Run, the service's request timeout: 5 minutes by default, up to 60). For a nightly sync, pass `updated_after` with the time of the previous run to export only the tickets that changed.
+    -   **Example:**
+        ```bash
+        curl -N "http://localhost:8080/tickets/export?updated_after=2026-10-26T00:00:00" -H "X-API-Key: your_osTicket_api_key"
+        ```
+
 -   **GET /tickets/{ticket_id}**
     -   **Description:** Retrieves a single ticket by its ID, including all associated custom field data, its original `subject`/`message` (from the ticket thread's first entry), and `closed` timestamp (`null` if still open). Note: `GET /tickets` (list) also includes `subject`/`message`/`custom_fields`, but not `closed` - fetch the individual ticket for that.
     -   **Example:**
