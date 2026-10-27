@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Dates are the date of each
 release's tag.
 
+## [0.10.18] - 2026-10-27
+
+### Added
+- `GET /tickets/export` exports every matching ticket in one streamed response, as
+  newline-delimited JSON (`application/x-ndjson`), for batch jobs that need all tickets.
+  Paging through `GET /tickets` for this runs a count and a deeper offset scan on every page,
+  so a full nightly sync took hundreds of increasingly slow requests and could exhaust Cloud Run
+  capacity (429). The export accepts the same filters as `GET /tickets`, reads tickets in
+  internal batches by `ticket_id`, and returns each ticket once, with its user's default email.
+
 ## [0.10.17] - 2026-10-22
 
 ### Fixed
