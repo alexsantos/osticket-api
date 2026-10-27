@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Dates are the date of each
 release's tag.
 
+## [0.10.19] - 2026-10-27
+
+### Changed
+- Updated dependencies: FastAPI 0.162.0 (with Starlette 1.10.0), SQLAlchemy 2.1.6, mysqlclient
+  2.3.0, Uvicorn 0.54.0 and python-dotenv 1.2.4, now pinned to exact versions.
+- Replaced httpx with httpx2, which Starlette's test client now uses. httpx was only needed by the
+  test client; the API's own calls to osTicket use `requests`. No change to API behavior.
+
 ## [0.10.18] - 2026-10-27
 
 ### Added
