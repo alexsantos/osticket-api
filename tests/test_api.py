@@ -2056,3 +2056,151 @@ def test_add_ticket_updated_index_script(db_conn):
         # Keep the shared test schema identical to stock osTicket for other tests.
         db_conn.exec_driver_sql("ALTER TABLE ost_ticket DROP INDEX IF EXISTS api_updated")
         db_conn.rollback()
+
+
+def _export(client, url, api_key):
+    """GETs a GET /tickets/export URL and returns (response, parsed NDJSON lines)."""
+    import json
+
+    response = client.get(url, headers={"X-API-Key": api_key})
+    lines = [json.loads(line) for line in response.text.splitlines()] if response.status_code == 200 else []
+    return response, lines
+
+
+def test_export_tickets_streams_all_tickets_in_batches(client: TestClient, db_conn, monkeypatch):
+    """
+    GET /tickets/export returns every ticket, once each, as NDJSON in ticket_id order, with the
+    same fields as GET /tickets. A batch size that does not divide the ticket count checks that
+    nothing is lost or repeated at batch boundaries, including the final partial batch.
+    """
+    import main
+    monkeypatch.setattr(main, "EXPORT_BATCH_SIZE", 7)
+    with db_conn.begin():
+        _seed_tickets_with_threads(db_conn, 30)
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', 'export-key', NOW(), NOW())"))
+        expected_ids = db_conn.execute(text("SELECT ticket_id FROM ost_ticket ORDER BY ticket_id")).scalars().all()
+
+    response, lines = _export(client, "/tickets/export", "export-key")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    assert [line["ticket_id"] for line in lines] == expected_ids
+    # _seed_tickets_with_threads creates tickets in BULK-000.. order, so ids and numbers line up.
+    assert [line["number"] for line in lines] == [f"BULK-{i:03d}" for i in range(30)]
+    assert [line["subject"] for line in lines] == [f"Subject {i}" for i in range(30)]
+    assert lines[0]["user_email"] == "bulk@example.com"
+    assert set(lines[0]) == set(main.TicketItem.model_fields)
+
+    # An exact multiple of the batch size must end cleanly too (the last batch comes back empty).
+    monkeypatch.setattr(main, "EXPORT_BATCH_SIZE", 10)
+    response, lines = _export(client, "/tickets/export", "export-key")
+    assert [line["ticket_id"] for line in lines] == expected_ids
+
+
+def test_export_tickets_one_line_per_ticket_with_default_email(client: TestClient, db_conn):
+    """
+    Unlike GET /tickets, a user with several emails still yields one line per ticket, carrying
+    the user's default email, or their first email when no default is set.
+    """
+    with db_conn.begin():
+        db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, mode, flags, properties, created, updated) VALUES (1, 'Open', 'open', 3, 0, '{}', NOW(), NOW())"))
+        with_default = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'With Default', NOW(), NOW(), 0)")).lastrowid
+        db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'old@example.com')"), {"uid": with_default})
+        default_email_id = db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'default@example.com')"), {"uid": with_default}).lastrowid
+        db_conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"), {"eid": default_email_id, "uid": with_default})
+        no_default = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'No Default', NOW(), NOW(), 0)")).lastrowid
+        db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'first@example.com')"), {"uid": no_default})
+        db_conn.execute(text("INSERT INTO ost_user_email (user_id, address) VALUES (:uid, 'second@example.com')"), {"uid": no_default})
+        no_email = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'No Email', NOW(), NOW(), 0)")).lastrowid
+        for number, uid in (("E-1", with_default), ("E-2", no_default), ("E-3", no_email)):
+            db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES (:num, :uid, 1, NOW(), NOW())"), {"num": number, "uid": uid})
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', 'export-email-key', NOW(), NOW())"))
+
+    response, lines = _export(client, "/tickets/export", "export-email-key")
+    assert response.status_code == 200
+    assert [(line["number"], line["user_email"]) for line in lines] == [
+        ("E-1", "default@example.com"),
+        ("E-2", "first@example.com"),
+        ("E-3", None),
+    ]
+
+    # Filtering by a non-default address still finds the ticket, once.
+    response, lines = _export(client, "/tickets/export?email=second@example.com", "export-email-key")
+    assert [line["number"] for line in lines] == ["E-2"]
+
+
+def test_export_tickets_applies_filters(client: TestClient, db_conn):
+    """GET /tickets/export accepts the same standard and custom field filters as GET /tickets."""
+    with db_conn.begin():
+        db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, mode, flags, properties, created, updated) VALUES (1, 'Open', 'open', 3, 0, '{}', NOW(), NOW())"))
+        db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, mode, flags, properties, created, updated) VALUES (2, 'Closed', 'closed', 3, 0, '{}', NOW(), NOW())"))
+        user_id = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, 'Filter User', NOW(), NOW(), 0)")).lastrowid
+        form_id = db_conn.execute(text("INSERT INTO ost_form (title, created, updated) VALUES ('Export Form', NOW(), NOW())")).lastrowid
+        field_id = db_conn.execute(text("INSERT INTO ost_form_field (form_id, label, name, type, sort, created, updated) VALUES (:fid, 'EFR', 'EFR', 'choices', 1, NOW(), NOW())"), {"fid": form_id}).lastrowid
+        now = datetime.now()
+        for number, status, age_days, efr in (("F-1", 1, 10, '{"14":"Médis"}'), ("F-2", 2, 1, '{"15":"Multicare"}'), ("F-3", 1, 1, '{"15":"Multicare"}')):
+            ticket_id = db_conn.execute(
+                text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES (:num, :uid, :st, :ts, :ts)"),
+                {"num": number, "uid": user_id, "st": status, "ts": now - timedelta(days=age_days)},
+            ).lastrowid
+            entry_id = db_conn.execute(text("INSERT INTO ost_form_entry (form_id, object_id, object_type, created, updated) VALUES (:fid, :tid, 'T', NOW(), NOW())"), {"fid": form_id, "tid": ticket_id}).lastrowid
+            db_conn.execute(text("INSERT INTO ost_form_entry_values (entry_id, field_id, value) VALUES (:eid, :fid, :val)"), {"eid": entry_id, "fid": field_id, "val": efr})
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', 'export-filter-key', NOW(), NOW())"))
+
+    def numbers(url):
+        response, lines = _export(client, url, "export-filter-key")
+        assert response.status_code == 200
+        return [line["number"] for line in lines]
+
+    assert numbers("/tickets/export") == ["F-1", "F-2", "F-3"]
+    assert numbers("/tickets/export?status_id=1") == ["F-1", "F-3"]
+    since = (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%S")
+    assert numbers(f"/tickets/export?updated_after={since}") == ["F-2", "F-3"]
+    assert numbers("/tickets/export?EFR=Multicare&status_id=1") == ["F-3"]
+    assert numbers("/tickets/export?EFR=Médis") == ["F-1"]
+    _, lines = _export(client, "/tickets/export?EFR=Médis", "export-filter-key")
+    assert lines[0]["custom_fields"] == {"EFR": "Médis"}
+    assert numbers("/tickets/export?status_id=99") == []
+
+
+def test_export_tickets_requires_api_key(client: TestClient, db_conn):
+    """The export is authenticated like every other route."""
+    response = client.get("/tickets/export")
+    assert response.status_code == 422
+
+    response = client.get("/tickets/export", headers={"X-API-Key": "no-such-key"})
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Invalid API Key"
+
+
+def test_export_tickets_batch_query_is_driven_by_ticket_primary_key(client: TestClient, db_conn):
+    """
+    Each export batch must be a primary-key range read on ost_ticket, so later batches cost the
+    same as the first (no OFFSET scan) and no batch sorts or buffers every matching ticket.
+    """
+    import main
+    from sqlalchemy import event
+
+    with db_conn.begin():
+        _seed_tickets_with_threads(db_conn, 30)
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', 'export-plan-key', NOW(), NOW())"))
+
+    statements = []
+
+    def capture(_conn, _cursor, statement, parameters, _context, _executemany):
+        statements.append((statement, parameters))
+
+    event.listen(main.engine, "before_cursor_execute", capture)
+    try:
+        response, _ = _export(client, "/tickets/export", "export-plan-key")
+    finally:
+        event.remove(main.engine, "before_cursor_execute", capture)
+    assert response.status_code == 200
+
+    ids_sql, ids_params = next((s, p) for s, p in statements if "t.ticket_id > " in s)
+    rows = db_conn.exec_driver_sql("EXPLAIN " + ids_sql, ids_params).mappings().all()
+    db_conn.rollback()
+    assert rows[0]["table"] == "t"
+    assert rows[0]["key"] == "PRIMARY"
+    for row in rows:
+        assert "filesort" not in (row["Extra"] or "")
+        assert "temporary" not in (row["Extra"] or "")
