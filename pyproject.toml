@@ -4,14 +4,14 @@ version = "0.11.0-dev"
 description = "A new API for OSTicket"
 requires-python = ">=3.14"
 dependencies = [
-    "fastapi>=0.143.0",
-    "mysqlclient>=2.3.0",
+    "fastapi==0.162.0",
+    "mysqlclient==2.3.0",
     "python-multipart>=0.0.32",
     "requests>=2.34.2",
-    "sqlalchemy>=2.1.4",
-    "uvicorn>=0.54.0",
-    "python-dotenv>=1.2.4",
-    "httpx2>=2.13.1",
+    "sqlalchemy==2.1.6",
+    "uvicorn==0.54.0",
+    "python-dotenv==1.2.4",
+    "httpx2==2.16.0",
 ]
 
 [tool.pytest.ini_options]
@@ -39,6 +39,6 @@ show_missing = true
 
 [dependency-groups]
 dev = [
-    "pytest>=9.1.1",
+    "pytest==9.1.1",
     "pytest-cov>=7.1.0",
 ]
