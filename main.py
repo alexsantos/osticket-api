@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import (Depends, FastAPI, File, Header, HTTPException, Query,
                      Request, UploadFile)
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy import bindparam, create_engine, text, event
 from sqlalchemy.engine import Engine, URL
 
@@ -167,7 +167,7 @@ async def verify_token(x_api_key: str = Header(...)):
             raise HTTPException(status_code=403, detail="API Key is not active")
 
 app = FastAPI(
-    title="osTicket Ultimate Python API", version="0.10.17", lifespan=lifespan
+    title="osTicket Ultimate Python API", version="0.10.18", lifespan=lifespan
 )
 
 
@@ -335,6 +335,121 @@ def get_user(user_id: int):
 
 # --- TICKETS ---
 
+def _build_ticket_filters(conn, request: Request, known_params: set, status_id, topic_id, dept_id, email,
+                          updated_after, updated_before):
+    """
+    Builds the WHERE clauses, bound params and custom field joins shared by GET /tickets and
+    GET /tickets/export. Query params not in `known_params` are treated as custom field filters.
+    """
+    where_clauses = []
+    params = {}
+    if status_id:
+        where_clauses.append("t.status_id IN :status_ids")
+        params["status_ids"] = tuple(status_id)
+    if topic_id:
+        where_clauses.append("t.topic_id IN :topic_ids")
+        params["topic_ids"] = tuple(topic_id)
+    if dept_id:
+        where_clauses.append("t.dept_id IN :dept_ids")
+        params["dept_ids"] = tuple(dept_id)
+    if email:
+        where_clauses.append("ue.address = :email")
+        params["email"] = email
+    if updated_after:
+        where_clauses.append("t.updated >= :updated_after")
+        params["updated_after"] = updated_after
+    if updated_before:
+        where_clauses.append("t.updated <= :updated_before")
+        params["updated_before"] = updated_before
+
+    # --- Custom Fields Filtering ---
+    custom_field_joins = ""
+    custom_field_params = {}
+
+    # Identify custom field filters from the query parameters
+    custom_field_keys = [k for k in request.query_params.keys() if k not in known_params]
+    supports_json = _json_functions_supported(conn) if custom_field_keys else True
+
+    # Dynamically build joins and where clauses for each custom field
+    for i, field_name in enumerate(custom_field_keys):
+        join_alias_fe = f"fe{i}"
+        join_alias_fev = f"fev{i}"
+        join_alias_ff = f"ff{i}"
+        param_name_field = f"cf_name_{i}"
+
+        custom_field_joins += f"""
+            JOIN ost_form_entry {join_alias_fe} ON ({join_alias_fe}.object_id = t.ticket_id AND {join_alias_fe}.object_type = 'T')
+            JOIN ost_form_entry_values {join_alias_fev} ON {join_alias_fev}.entry_id = {join_alias_fe}.id
+            JOIN ost_form_field {join_alias_ff} ON {join_alias_ff}.id = {join_alias_fev}.field_id
+        """
+
+        # Handle multiple values for a single custom field (e.g., ?EFR=Value1,Value2 or ?EFR=Value1&EFR=Value2)
+        search_values = request.query_params.getlist(field_name)
+        flat_values = [item for sublist in [v.split(',') for v in search_values] for item in sublist if item.strip()]
+
+        # Create a list of LIKE conditions for each value to handle JSON-encoded fields
+        like_conditions = []
+        for j, value in enumerate(flat_values):
+            param_name_val = f"cf_val_{i}_{j}"
+            if supports_json:
+                # This condition intelligently handles both plain text and JSON-encoded choice fields.
+                # 1. It tries to extract the value from a JSON object (e.g., {"14":"Médis"}) and unescapes it.
+                # 2. If the field is not a JSON object, the COALESCE falls back to the raw value.
+                # 3. This ensures a clean, direct comparison against the user's search term.
+                like_conditions.append(f"COALESCE(JSON_UNQUOTE(JSON_EXTRACT(JSON_EXTRACT({join_alias_fev}.value, '$.*'), '$[0]')), {join_alias_fev}.value) LIKE :{param_name_val}")
+            else:
+                # Older servers (MariaDB < 10.2, MySQL < 5.7.8) lack JSON_EXTRACT/JSON_UNQUOTE.
+                # Fall back to matching the raw stored value directly.
+                like_conditions.append(f"{join_alias_fev}.value LIKE :{param_name_val}")
+            custom_field_params[param_name_val] = f"%{value}%"
+
+        # Combine the LIKE conditions with OR
+        combined_likes = " OR ".join(like_conditions)
+
+        where_clauses.append(
+            f"""(
+                {join_alias_ff}.name = :{param_name_field} AND ({combined_likes})
+            )"""
+        )
+        custom_field_params[param_name_field] = field_name
+
+    params.update(custom_field_params)
+
+    return where_clauses, params, custom_field_joins
+
+
+def _attach_custom_fields(conn, items: List[dict]):
+    """Adds each ticket's custom form fields to its item, as a `custom_fields` dict."""
+    ticket_ids = list({item['ticket_id'] for item in items})
+    if not ticket_ids:
+        return
+    custom_fields_query = text("""
+        SELECT
+            fe.object_id as ticket_id,
+            ff.name,
+            fev.value
+        FROM
+            ost_form_entry fe
+        JOIN
+            ost_form_entry_values fev ON fe.id = fev.entry_id
+        JOIN
+            ost_form_field ff ON fev.field_id = ff.id
+        WHERE
+            fe.object_id IN :ticket_ids
+            AND fe.object_type = 'T'
+    """)
+    custom_fields_results = conn.execute(custom_fields_query, {"ticket_ids": tuple(ticket_ids)}).mappings().all()
+
+    # Organize custom fields by ticket_id
+    custom_fields_map = {tid: {} for tid in ticket_ids}
+    for cf in custom_fields_results:
+        custom_fields_map[cf['ticket_id']][cf['name']] = _parse_custom_field_value(cf['value'])
+
+    # Attach the custom fields to the corresponding ticket items
+    for item in items:
+        item['custom_fields'] = custom_fields_map.get(item['ticket_id'], {})
+
+
 @app.get("/tickets", response_model=PaginatedTicketResponse, dependencies=[Depends(verify_token)],
          tags=["Tickets"])
 def list_tickets(
@@ -367,80 +482,11 @@ def list_tickets(
     The response includes the list of tickets, pagination details, and any associated custom fields for each ticket.
     """
     with _get_engine().connect() as conn:
-        where_clauses = []
-        params = {}
-        if status_id:
-            where_clauses.append("t.status_id IN :status_ids")
-            params["status_ids"] = tuple(status_id)
-        if topic_id:
-            where_clauses.append("t.topic_id IN :topic_ids")
-            params["topic_ids"] = tuple(topic_id)
-        if dept_id:
-            where_clauses.append("t.dept_id IN :dept_ids")
-            params["dept_ids"] = tuple(dept_id)
-        if email:
-            where_clauses.append("ue.address = :email")
-            params["email"] = email
-        if updated_after:
-            where_clauses.append("t.updated >= :updated_after")
-            params["updated_after"] = updated_after
-        if updated_before:
-            where_clauses.append("t.updated <= :updated_before")
-            params["updated_before"] = updated_before
-
-        # --- Custom Fields Filtering ---
-        custom_field_joins = ""
-        custom_field_params = {}
-        known_params = {'status_id', 'topic_id', 'dept_id', 'email', 'updated_after', 'updated_before', 'limit', 'offset'}
-
-        # Identify custom field filters from the query parameters
-        custom_field_keys = [k for k in request.query_params.keys() if k not in known_params]
-        supports_json = _json_functions_supported(conn) if custom_field_keys else True
-
-        # Dynamically build joins and where clauses for each custom field
-        for i, field_name in enumerate(custom_field_keys):
-            join_alias_fe = f"fe{i}"
-            join_alias_fev = f"fev{i}"
-            join_alias_ff = f"ff{i}"
-            param_name_field = f"cf_name_{i}"
-
-            custom_field_joins += f"""
-                JOIN ost_form_entry {join_alias_fe} ON ({join_alias_fe}.object_id = t.ticket_id AND {join_alias_fe}.object_type = 'T')
-                JOIN ost_form_entry_values {join_alias_fev} ON {join_alias_fev}.entry_id = {join_alias_fe}.id
-                JOIN ost_form_field {join_alias_ff} ON {join_alias_ff}.id = {join_alias_fev}.field_id
-            """
-
-            # Handle multiple values for a single custom field (e.g., ?EFR=Value1,Value2 or ?EFR=Value1&EFR=Value2)
-            search_values = request.query_params.getlist(field_name)
-            flat_values = [item for sublist in [v.split(',') for v in search_values] for item in sublist if item.strip()]
-
-            # Create a list of LIKE conditions for each value to handle JSON-encoded fields
-            like_conditions = []
-            for j, value in enumerate(flat_values):
-                param_name_val = f"cf_val_{i}_{j}"
-                if supports_json:
-                    # This condition intelligently handles both plain text and JSON-encoded choice fields.
-                    # 1. It tries to extract the value from a JSON object (e.g., {"14":"Médis"}) and unescapes it.
-                    # 2. If the field is not a JSON object, the COALESCE falls back to the raw value.
-                    # 3. This ensures a clean, direct comparison against the user's search term.
-                    like_conditions.append(f"COALESCE(JSON_UNQUOTE(JSON_EXTRACT(JSON_EXTRACT({join_alias_fev}.value, '$.*'), '$[0]')), {join_alias_fev}.value) LIKE :{param_name_val}")
-                else:
-                    # Older servers (MariaDB < 10.2, MySQL < 5.7.8) lack JSON_EXTRACT/JSON_UNQUOTE.
-                    # Fall back to matching the raw stored value directly.
-                    like_conditions.append(f"{join_alias_fev}.value LIKE :{param_name_val}")
-                custom_field_params[param_name_val] = f"%{value}%"
-
-            # Combine the LIKE conditions with OR
-            combined_likes = " OR ".join(like_conditions)
-
-            where_clauses.append(
-                f"""(
-                    {join_alias_ff}.name = :{param_name_field} AND ({combined_likes})
-                )"""
-            )
-            custom_field_params[param_name_field] = field_name
-
-        params.update(custom_field_params)
+        where_clauses, params, custom_field_joins = _build_ticket_filters(
+            conn, request,
+            {'status_id', 'topic_id', 'dept_id', 'email', 'updated_after', 'updated_before', 'limit', 'offset'},
+            status_id, topic_id, dept_id, email, updated_after, updated_before,
+        )
 
         # --- Finalize WHERE clause after all filters are added ---
         where_clause = " AND ".join(where_clauses)
@@ -521,35 +567,8 @@ def list_tickets(
         results = conn.execute(text(data_sql), params).mappings().all()
 
         # --- Fetch and Attach Custom Fields ---
-        ticket_ids = [r["ticket_id"] for r in results]
         final_items = [dict(r) for r in results]
-
-        if ticket_ids:
-            custom_fields_query = text("""
-                SELECT
-                    fe.object_id as ticket_id,
-                    ff.name,
-                    fev.value
-                FROM
-                    ost_form_entry fe
-                JOIN
-                    ost_form_entry_values fev ON fe.id = fev.entry_id
-                JOIN
-                    ost_form_field ff ON fev.field_id = ff.id
-                WHERE
-                    fe.object_id IN :ticket_ids
-                    AND fe.object_type = 'T'
-            """)
-            custom_fields_results = conn.execute(custom_fields_query, {"ticket_ids": tuple(ticket_ids)}).mappings().all()
-
-            # Organize custom fields by ticket_id
-            custom_fields_map = {tid: {} for tid in ticket_ids}
-            for cf in custom_fields_results:
-                custom_fields_map[cf['ticket_id']][cf['name']] = _parse_custom_field_value(cf['value'])
-
-            # Attach the custom fields to the corresponding ticket items
-            for item in final_items:
-                item['custom_fields'] = custom_fields_map.get(item['ticket_id'], {})
+        _attach_custom_fields(conn, final_items)
 
         next_url, prev_url = build_pagination_urls(request, limit, offset, total_records)
 
@@ -561,6 +580,139 @@ def list_tickets(
             "previous": prev_url,
             "items": final_items
         }
+
+
+# Tickets read per database round trip by GET /tickets/export.
+EXPORT_BATCH_SIZE = 1000
+
+
+def _export_ticket_batches(where_clauses: List[str], params: dict, custom_field_joins: str, email: Optional[str]):
+    """
+    Yields GET /tickets/export's NDJSON output, one chunk per batch of EXPORT_BATCH_SIZE tickets.
+
+    Batches are keyed on ticket_id (`ticket_id > last id seen`), so every batch is a short
+    primary-key range read no matter how deep into the export it is, unlike LIMIT/OFFSET. Each
+    batch takes its own pooled connection, so a slow client never holds a connection or an open
+    server-side cursor while it reads.
+    """
+    # Same reasoning as GET /tickets: drive from ost_ticket (here, its primary key) unless the
+    # `email` filter makes the unique ost_user_email.address key the selective starting point.
+    # GROUP BY collapses the extra rows the email and custom field joins can produce; unlike
+    # DISTINCT, grouping on the driving table's primary key needs no temporary table.
+    join_hint = "" if email else "STRAIGHT_JOIN"
+    ids_sql = f"""
+        SELECT {join_hint} t.ticket_id
+        FROM ost_ticket t
+        JOIN ost_ticket_status s ON t.status_id = s.id
+        JOIN ost_user u ON t.user_id = u.id
+        LEFT JOIN ost_user_email ue ON u.id = ue.user_id
+        {custom_field_joins}
+        WHERE {" AND ".join(where_clauses + ["t.ticket_id > :after_id"])}
+        GROUP BY t.ticket_id
+        ORDER BY t.ticket_id
+        LIMIT :batch_size
+    """
+    # One row per ticket, carrying the user's default email (or their first one, if no default
+    # is set), unlike GET /tickets, which returns one row per user email.
+    data_sql = """
+        SELECT t.ticket_id,
+               t.number,
+               t.created,
+               t.status_id,
+               s.name as status_name,
+               t.topic_id,
+               ht.topic as topic_name,
+               t.dept_id,
+               d.name as dept_name,
+               t.user_id,
+               u.name as user_name,
+               ue.address as user_email,
+               t.team_id,
+               team.name as team_name,
+               te.title   as subject,
+               te.body    as message
+        FROM ost_ticket t
+        JOIN ost_ticket_status s ON t.status_id = s.id
+        JOIN ost_user u ON t.user_id = u.id
+        LEFT JOIN ost_user_email ue ON ue.id = (
+                         SELECT ue2.id FROM ost_user_email ue2
+                         WHERE ue2.user_id = u.id
+                         ORDER BY ue2.id = u.default_email_id DESC, ue2.id
+                         LIMIT 1
+                     )
+        LEFT JOIN ost_help_topic ht ON t.topic_id = ht.topic_id
+        LEFT JOIN ost_department d ON t.dept_id = d.id
+        LEFT JOIN ost_team team ON t.team_id = team.team_id
+        LEFT JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
+        LEFT JOIN ost_thread_entry te ON te.id = (
+                         SELECT MIN(id) FROM ost_thread_entry WHERE thread_id = th.id
+                     )
+        WHERE t.ticket_id IN :ticket_ids
+        ORDER BY t.ticket_id
+    """
+
+    after_id = 0
+    while True:
+        with _get_engine().connect() as conn:
+            ticket_ids = conn.execute(
+                text(ids_sql), {**params, "after_id": after_id, "batch_size": EXPORT_BATCH_SIZE}
+            ).scalars().all()
+            if not ticket_ids:
+                return
+            results = conn.execute(text(data_sql), {"ticket_ids": tuple(ticket_ids)}).mappings().all()
+            items = [dict(r) for r in results]
+            _attach_custom_fields(conn, items)
+
+        yield "".join(TicketItem.model_validate(item).model_dump_json() + "\n" for item in items)
+
+        if len(ticket_ids) < EXPORT_BATCH_SIZE:
+            return
+        after_id = ticket_ids[-1]
+
+
+@app.get("/tickets/export", response_class=StreamingResponse, dependencies=[Depends(verify_token)],
+         tags=["Tickets"],
+         responses={200: {"description": "One JSON ticket object per line (NDJSON).",
+                          "content": {"application/x-ndjson": {}}}})
+def export_tickets(
+        request: Request,
+        status_id: Optional[List[int]] = Depends(CommaSeparatedInts("status_id")),
+        topic_id: Optional[List[int]] = Depends(CommaSeparatedInts("topic_id")),
+        dept_id: Optional[List[int]] = Depends(CommaSeparatedInts("dept_id")),
+        email: Optional[str] = None,
+        updated_after: Optional[datetime] = Query(None, description="Export tickets updated after this date (YYYY-MM-DDTHH:MM:SS)."),
+        updated_before: Optional[datetime] = Query(None, description="Export tickets updated before this date (YYYY-MM-DDTHH:MM:SS)."),
+):
+    """
+    Export every matching ticket in a single streamed response, for batch jobs.
+
+    Accepts the same filters as `GET /tickets`, including custom field filters, but has no
+    pagination: the response is newline-delimited JSON (`application/x-ndjson`), one ticket per
+    line, with the same fields as a `GET /tickets` item. Read it line by line as it arrives
+    instead of loading it whole.
+
+    - Tickets are ordered by `ticket_id`.
+    - Each ticket appears once, with its user's default email address. (`GET /tickets` instead
+      returns one row per email address of the ticket's user.)
+    - For a nightly sync, pass `updated_after` with the time of the previous run to export only
+      tickets that changed since then.
+
+    The response is streamed, so a failure partway through cannot change the status code: the
+    connection is cut instead, which HTTP clients report as an incomplete (truncated) response.
+    Treat that as a failed export and retry.
+    """
+    # Build the filters before streaming starts, so problems surface as a normal error
+    # response rather than a cut-off stream.
+    with _get_engine().connect() as conn:
+        where_clauses, params, custom_field_joins = _build_ticket_filters(
+            conn, request,
+            {'status_id', 'topic_id', 'dept_id', 'email', 'updated_after', 'updated_before'},
+            status_id, topic_id, dept_id, email, updated_after, updated_before,
+        )
+    return StreamingResponse(
+        _export_ticket_batches(where_clauses, params, custom_field_joins, email),
+        media_type="application/x-ndjson",
+    )
 
 
 def _query_ticket_messages(conn, ticket_ids: List[int]):
