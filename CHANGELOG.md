@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Dates are the date of each
 release's tag.
 
-## [Unreleased]
+## [0.11.0] - 2026-11-05
 
 ### Added
 - `GET /attachments/{attachment_id}/content` downloads one ticket attachment's file as raw bytes,
@@ -18,6 +18,11 @@ release's tag.
   `GET /tickets/{ticket_id}/attachments`. Pass `false` to get only the metadata, with `content`
   null and no file read, then download the files you need with the new endpoint. It defaults to
   `true`, so existing clients are unaffected.
+
+### Changed
+- Publishing an older patch release no longer moves the `major.minor` Docker image tag (e.g.
+  `0.10`) back to that older version. It now moves only for the newest patch in its line, the
+  same check that already guarded `latest`.
 
 ## [0.10.21] - 2026-11-05
 
