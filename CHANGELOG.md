@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Dates are the date of each
 release's tag.
 
+## [0.10.21] - 2026-11-05
+
+### Fixed
+- `GET /attachments`, `GET /tickets/attachments` and `GET /tickets/{ticket_id}/attachments`
+  failed on Cloud Run with "Response size was too large" when the attachments added up to more
+  than 32 MiB once base64-encoded. Cloud Run rejects non-streamed responses over that size, and
+  the list was built whole in memory. It is now streamed one attachment at a time, so only one
+  file's content is held in memory at once. The response body is unchanged. Because it is
+  streamed, a failure partway through cuts the connection instead of returning an error status.
+
 ## [0.10.20] - 2026-11-05
 
 ### Fixed
