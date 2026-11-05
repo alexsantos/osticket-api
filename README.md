@@ -272,10 +272,11 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
         -   `404` if the ticket does not exist or has no messages.
 
 -   **GET /tickets/{ticket_id}/attachments**
-    -   **Description:** Retrieves the attachments for a single ticket by its ID, including file metadata, base64-encoded content, and the message entry they belong to. `content` is `null` when the file's bytes live in a non-database storage backend (e.g. filesystem) that this API cannot read - check `size` for the actual file size in that case. `cid` matches the lowercased value osTicket embeds in `<img src="cid:...">` tags for inline images in the message body - use it to relate an inline image reference back to its attachment; it's `null` for attachments not referenced inline.
+    -   **Description:** Retrieves the attachments for a single ticket by its ID, including file metadata, base64-encoded content, and the message entry they belong to. Files stored outside the database (e.g. on the filesystem) are fetched through osTicket's web frontend when the `OSTICKET_*` variables are set; `content` is `null` when that isn't configured or the fetch fails - check `size` for the actual file size in that case. Pass `include_content=false` to get only the metadata (every `content` is `null` and no file is read), then download files one at a time with `GET /attachments/{attachment_id}/content`. The response is streamed, so a failure partway through cuts the connection instead of returning an error status. `cid` matches the lowercased value osTicket embeds in `<img src="cid:...">` tags for inline images in the message body - use it to relate an inline image reference back to its attachment; it's `null` for attachments not referenced inline.
     -   **Example:**
         ```bash
         curl -X GET "http://localhost:8080/tickets/123/attachments" -H "X-API-Key: your_osTicket_api_key"
+        curl -X GET "http://localhost:8080/tickets/123/attachments?include_content=false" -H "X-API-Key: your_osTicket_api_key"
         ```
     -   **Errors:**
         -   `404` if the ticket does not exist or has no attachments.
@@ -305,10 +306,11 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
 ### Attachments
 
 -   **GET /attachments**
-    -   **Description:** Retrieves the attachments for a comma-separated list of ticket IDs, including file metadata, base64-encoded content, and the message entry they belong to. `content` is `null` when the file's bytes live in a non-database storage backend (e.g. filesystem) that this API cannot read - check `size` for the actual file size in that case. `cid` matches the lowercased value osTicket embeds in `<img src="cid:...">` tags for inline images in the message body - use it to relate an inline image reference back to its attachment; it's `null` for attachments not referenced inline.
+    -   **Description:** Retrieves the attachments for a comma-separated list of ticket IDs, including file metadata, base64-encoded content, and the message entry they belong to. Files stored outside the database (e.g. on the filesystem) are fetched through osTicket's web frontend when the `OSTICKET_*` variables are set; `content` is `null` when that isn't configured or the fetch fails - check `size` for the actual file size in that case. Pass `include_content=false` to get only the metadata (every `content` is `null` and no file is read), then download files one at a time with `GET /attachments/{attachment_id}/content`. The response is streamed, so a failure partway through cuts the connection instead of returning an error status. `cid` matches the lowercased value osTicket embeds in `<img src="cid:...">` tags for inline images in the message body - use it to relate an inline image reference back to its attachment; it's `null` for attachments not referenced inline.
     -   **Example:**
         ```bash
         curl -X GET "http://localhost:8080/attachments?ticket_ids=123,456" -H "X-API-Key: your_osTicket_api_key"
+        curl -X GET "http://localhost:8080/attachments?ticket_ids=123,456&include_content=false" -H "X-API-Key: your_osTicket_api_key"
         ```
     -   **Errors:**
         -   `422` if `ticket_ids` is missing.
@@ -323,6 +325,16 @@ All endpoints require an `X-API-Key` header with a valid API key created in osTi
     -   **Errors:**
         -   `422` if `ticket_ids` is missing.
         -   `404` if the tickets do not exist or no attachments found.
+
+-   **GET /attachments/{attachment_id}/content**
+    -   **Description:** Downloads one ticket attachment's file as raw bytes - no JSON, no base64. `attachment_id` is the `attachment_id` returned by `GET /attachments`. The response has the file's stored MIME type as `Content-Type` and a `Content-Disposition: attachment` header with its name. Use it with `include_content=false` on the list endpoints for large files: Cloud Run rejects non-streamed responses over 32 MiB, and base64 makes files a third larger. Files stored outside the database are fetched through osTicket's web frontend (see the `OSTICKET_*` variables). The response is streamed, so a failure partway through cuts the connection instead of returning an error status.
+    -   **Example:**
+        ```bash
+        curl -X GET "http://localhost:8080/attachments/789/content" -H "X-API-Key: your_osTicket_api_key" -OJ
+        ```
+    -   **Errors:**
+        -   `404` if no ticket attachment has this ID.
+        -   `502` if the file is stored outside the database and could not be fetched from osTicket (the fallback is not configured, or the fetch failed).
 
 -   **POST /tickets**
     -   **Description:** Creates a new ticket.

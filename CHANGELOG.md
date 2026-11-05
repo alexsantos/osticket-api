@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Dates are the date of each
 release's tag.
 
+## [Unreleased]
+
+### Added
+- `GET /attachments/{attachment_id}/content` downloads one ticket attachment's file as raw bytes,
+  with its stored MIME type and a `Content-Disposition` header carrying its name. There is no
+  JSON or base64 overhead, and the file is streamed chunk by chunk, so large files are not
+  subject to Cloud Run's 32 MiB limit on non-streamed responses. Files stored outside the
+  database are fetched through the osTicket fallback, and a failed fetch returns `502`.
+- `include_content` parameter on `GET /attachments`, `GET /tickets/attachments` and
+  `GET /tickets/{ticket_id}/attachments`. Pass `false` to get only the metadata, with `content`
+  null and no file read, then download the files you need with the new endpoint. It defaults to
+  `true`, so existing clients are unaffected.
+
 ## [0.10.21] - 2026-11-05
 
 ### Fixed
