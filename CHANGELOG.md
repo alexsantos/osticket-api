@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Dates are the date of each
 release's tag.
 
+## [0.10.20] - 2026-11-05
+
+### Fixed
+- Attachments fetched through the osTicket fallback could return the osTicket login page's HTML
+  as their `content` once the cached staff session expired, because the download followed
+  osTicket's redirect to the login page. Redirects are no longer followed. A redirect to
+  `login.php` now logs in again and retries the download once.
+- Failed fallback downloads now log a single-line excerpt of the error page (its title and
+  visible text) plus the `Content-Type` and `Location` headers. Before, the log kept only the
+  first 200 characters of the HTML, and Cloud Logging showed just `<!DOCTYPE html>`.
+
 ## [0.10.19] - 2026-10-27
 
 ### Changed
