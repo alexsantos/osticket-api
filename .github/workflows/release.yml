@@ -39,6 +39,16 @@ jobs:
           else
             echo "is_latest=false" >> "$GITHUB_OUTPUT"
           fi
+          # Same check within the release's major.minor line, so publishing an
+          # older patch release can't move the {{major}}.{{minor}} image tag back.
+          MINOR="${CURRENT%.*}"
+          HIGHEST_IN_MINOR=$(git tag --list "${MINOR}.*" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+          echo "Highest tag in ${MINOR}: $HIGHEST_IN_MINOR"
+          if [ "$CURRENT" = "$HIGHEST_IN_MINOR" ]; then
+            echo "is_latest_in_minor=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_latest_in_minor=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Extract image metadata
         id: meta
@@ -47,7 +57,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ steps.latest_check.outputs.is_latest_in_minor == 'true' }}
             type=raw,value=latest,enable=${{ steps.latest_check.outputs.is_latest == 'true' && !github.event.release.prerelease }}
 
       - name: Build and push image

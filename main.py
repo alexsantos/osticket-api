@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Iterator, List, Optional, Tuple
 import json
 from contextlib import asynccontextmanager
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from fastapi import (Depends, FastAPI, File, Header, HTTPException, Query,
@@ -167,7 +168,7 @@ async def verify_token(x_api_key: str = Header(...)):
             raise HTTPException(status_code=403, detail="API Key is not active")
 
 app = FastAPI(
-    title="osTicket Ultimate Python API", version="0.10.21", lifespan=lifespan
+    title="osTicket Ultimate Python API", version="0.11.0", lifespan=lifespan
 )
 
 
@@ -855,9 +856,12 @@ def _load_attachment_content(conn, attachment: dict, file_key: Optional[str],
     )
 
 
-def _stream_attachments(attachments: List[Tuple[dict, Optional[str], Optional[str]]]) -> Iterator[str]:
+def _stream_attachments(attachments: List[Tuple[dict, Optional[str], Optional[str]]],
+                        include_content: bool = True) -> Iterator[str]:
     """
     Yields the attachments as one JSON array, one attachment at a time.
+
+    With include_content=False, no file is loaded and every `content` is null.
 
     Only one attachment's content is held in memory at a time, and the response goes out
     chunked: Cloud Run rejects non-streamed responses over 32 MiB ("Response size was too
@@ -867,27 +871,35 @@ def _stream_attachments(attachments: List[Tuple[dict, Optional[str], Optional[st
     """
     yield "["
     for index, (attachment, file_key, file_hash) in enumerate(attachments):
-        with _get_engine().connect() as conn:
-            content_bytes = _load_attachment_content(conn, attachment, file_key, file_hash)
+        content_bytes = None
+        if include_content:
+            with _get_engine().connect() as conn:
+                content_bytes = _load_attachment_content(conn, attachment, file_key, file_hash)
         item = {**attachment,
                 "content": base64.b64encode(content_bytes).decode("ascii") if content_bytes else None}
         yield ("," if index else "") + AttachmentsResponse.model_validate(item).model_dump_json()
     yield "]"
 
 
-def _attachments_response(ticket_ids: List[int]) -> StreamingResponse:
+def _attachments_response(ticket_ids: List[int], include_content: bool = True) -> StreamingResponse:
     # Look up the metadata before streaming starts, so "not found" is still a normal 404
     # rather than a cut-off stream.
     with _get_engine().connect() as conn:
         attachments = _query_ticket_attachments(conn, ticket_ids)
     if not attachments:
         raise HTTPException(status_code=404, detail="Ticket or Attachments not found")
-    return StreamingResponse(_stream_attachments(attachments), media_type="application/json")
+    return StreamingResponse(_stream_attachments(attachments, include_content), media_type="application/json")
 
 
 @app.get("/attachments", dependencies=[Depends(verify_token)], tags=["Attachments"],
          response_model=List[AttachmentsResponse])
-def list_attachments(ticket_ids: List[int] = Depends(CommaSeparatedInts("ticket_ids"))):
+def list_attachments(
+        ticket_ids: List[int] = Depends(CommaSeparatedInts("ticket_ids")),
+        include_content: bool = Query(True, description=(
+            "Include each file's bytes, base64-encoded, in `content`. Pass `false` to get only the "
+            "metadata (with `content` null) and download files with "
+            "`GET /attachments/{attachment_id}/content`.")),
+):
     """
     Retrieve the attachments for a list of tickets by their unique ID.
     Returns a 404 error if no matching tickets or attachments are found.
@@ -898,24 +910,36 @@ def list_attachments(ticket_ids: List[int] = Depends(CommaSeparatedInts("ticket_
     if not ticket_ids:
         raise HTTPException(status_code=422, detail="Query parameter 'ticket_ids' is required")
 
-    return _attachments_response(ticket_ids)
+    return _attachments_response(ticket_ids, include_content)
 
 
 @app.get("/tickets/attachments", dependencies=[Depends(verify_token)], tags=["Tickets"],
          response_model=List[AttachmentsResponse], deprecated=True)
-def list_ticket_attachments(ticket_ids: List[int] = Depends(CommaSeparatedInts("ticket_ids"))):
+def list_ticket_attachments(
+        ticket_ids: List[int] = Depends(CommaSeparatedInts("ticket_ids")),
+        include_content: bool = Query(True, description=(
+            "Include each file's bytes, base64-encoded, in `content`. Pass `false` to get only the "
+            "metadata (with `content` null) and download files with "
+            "`GET /attachments/{attachment_id}/content`.")),
+):
     """
     Deprecated: use `GET /attachments?ticket_ids=...` instead.
 
     Retrieve the attachments for a list of tickets by their unique ID.
     Returns a 404 error if no matching tickets or attachments are found.
     """
-    return list_attachments(ticket_ids)
+    return list_attachments(ticket_ids, include_content)
 
 
 @app.get("/tickets/{ticket_id}/attachments", dependencies=[Depends(verify_token)], tags=["Tickets"],
          response_model=List[AttachmentsResponse])
-def get_ticket_attachments(ticket_id: int):
+def get_ticket_attachments(
+        ticket_id: int,
+        include_content: bool = Query(True, description=(
+            "Include each file's bytes, base64-encoded, in `content`. Pass `false` to get only the "
+            "metadata (with `content` null) and download files with "
+            "`GET /attachments/{attachment_id}/content`.")),
+):
     """
     Retrieve the attachments for a single ticket by its unique ID.
     Returns a 404 error if the ticket cannot be found or has no attachments.
@@ -923,7 +947,95 @@ def get_ticket_attachments(ticket_id: int):
     The response is streamed, so a failure partway through cannot change the status code:
     the connection is cut instead, which HTTP clients report as an incomplete response.
     """
-    return _attachments_response([ticket_id])
+    return _attachments_response([ticket_id], include_content)
+
+
+# Size of the pieces a fallback-fetched file is sent in. Any streamed body works; this just
+# keeps the response chunked (see get_attachment_content).
+_CONTENT_STREAM_PIECE = 256 * 1024
+
+
+def _stream_file_chunks(file_id: int, chunk_ids: List[int]) -> Iterator[bytes]:
+    """Yields a database-stored file one ost_file_chunk row at a time."""
+    for chunk_id in chunk_ids:
+        with _get_engine().connect() as conn:
+            data = conn.execute(
+                text("SELECT filedata FROM ost_file_chunk WHERE file_id = :file_id AND chunk_id = :chunk_id"),
+                {"file_id": file_id, "chunk_id": chunk_id},
+            ).scalar_one_or_none()
+        if data:
+            yield data
+
+
+def _stream_bytes(data: bytes) -> Iterator[bytes]:
+    for start in range(0, len(data), _CONTENT_STREAM_PIECE):
+        yield data[start:start + _CONTENT_STREAM_PIECE]
+
+
+def _content_disposition(filename: str) -> str:
+    """`attachment` disposition with an ASCII fallback name plus the RFC 5987 UTF-8 name."""
+    ascii_name = "".join(c if 32 <= ord(c) < 127 and c not in '"\\' else "_" for c in filename)
+    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(filename, safe="")}'
+
+
+@app.get("/attachments/{attachment_id}/content", dependencies=[Depends(verify_token)], tags=["Attachments"],
+         response_class=StreamingResponse,
+         responses={200: {"description": "The file's raw bytes, with its stored MIME type.",
+                          "content": {"application/octet-stream": {}}},
+                    404: {"description": "No ticket attachment with this ID."},
+                    502: {"description": "The attachment exists, but its file could not be retrieved."}})
+def get_attachment_content(attachment_id: int):
+    """
+    Download one ticket attachment's file as raw bytes (no JSON, no base64).
+
+    `attachment_id` is the `attachment_id` returned by `GET /attachments`. The response has the
+    file's stored MIME type and a `Content-Disposition: attachment` header with its name.
+
+    Files stored in the database are streamed chunk by chunk. Files in another osTicket storage
+    backend are fetched through osTicket's web frontend; if that fallback is not configured or
+    the fetch fails, the response is a 502.
+
+    The response is streamed, so a failure partway through cannot change the status code: the
+    connection is cut instead, which HTTP clients report as an incomplete response.
+    """
+    with _get_engine().connect() as conn:
+        row = conn.execute(text("""
+            SELECT a.id AS attachment_id, a.file_id, f.name, f.type,
+                   f.`key` AS file_key, f.signature AS file_hash
+            FROM ost_attachment a
+                     JOIN ost_file f ON f.id = a.file_id
+                     JOIN ost_thread_entry te ON te.id = a.object_id
+                     JOIN ost_thread th ON th.id = te.thread_id AND th.object_type = 'T'
+            WHERE a.id = :attachment_id AND a.type = 'H'
+            """), {"attachment_id": attachment_id}).mappings().first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Attachment not found")
+        chunk_ids = conn.execute(
+            text("SELECT chunk_id FROM ost_file_chunk WHERE file_id = :file_id ORDER BY chunk_id ASC"),
+            {"file_id": row["file_id"]},
+        ).scalars().all()
+
+    if chunk_ids:
+        body = _stream_file_chunks(row["file_id"], chunk_ids)
+    else:
+        # Not stored in the database (see ost_file.bk): use the osTicket fallback, as the list does.
+        content_bytes = osticket_client.fetch_attachment_content(
+            file_id=row["file_id"],  # ost_file.id - never the attachment id; see osticket_client
+            attachment_id=row["attachment_id"],
+            key=row["file_key"],
+            file_hash=row["file_hash"],
+        )
+        if content_bytes is None:
+            raise HTTPException(status_code=502, detail="Attachment content could not be retrieved")
+        body = _stream_bytes(content_bytes)
+
+    # No Content-Length on purpose: a sized response is not streamed, and Cloud Run rejects
+    # non-streamed responses over 32 MiB.
+    return StreamingResponse(
+        body,
+        media_type=row["type"] or "application/octet-stream",
+        headers={"Content-Disposition": _content_disposition(row["name"] or f"attachment-{attachment_id}")},
+    )
 
 
 @app.get("/tickets/{ticket_id}", response_model=TicketItem, dependencies=[Depends(verify_token)], tags=["Tickets"])
