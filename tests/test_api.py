@@ -2216,9 +2216,9 @@ def _create_ticket_with_attachments(db_conn, label, files):
         ticket_id = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES (:n, :uid, 1, NOW(), NOW())"), {"n": label[:20], "uid": user_id}).lastrowid
         thread_id = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id}).lastrowid
         entry_id = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": thread_id}).lastrowid
-        for name, chunks in files:
+        for index, (name, chunks) in enumerate(files):
             size = sum(len(data) for _, data in chunks)
-            file_id = db_conn.execute(text("INSERT INTO ost_file (ft, type, size, name, `key`, signature, created) VALUES ('T', 'application/octet-stream', :size, :name, :key, 'sig', NOW())"), {"size": size, "name": name, "key": f"{label}-{name}"}).lastrowid
+            file_id = db_conn.execute(text("INSERT INTO ost_file (ft, type, size, name, `key`, signature, created) VALUES ('T', 'application/octet-stream', :size, :name, :key, 'sig', NOW())"), {"size": size, "name": name, "key": f"{label}-{index}"}).lastrowid
             for chunk_id, data in chunks:
                 db_conn.execute(text("INSERT INTO ost_file_chunk (file_id, chunk_id, filedata) VALUES (:fid, :cid, :data)"), {"fid": file_id, "cid": chunk_id, "data": data})
             db_conn.execute(text("INSERT INTO ost_attachment (object_id, type, file_id, inline) VALUES (:eid, 'H', :fid, 0)"), {"eid": entry_id, "fid": file_id})
@@ -2275,3 +2275,119 @@ def test_list_attachments_streams_responses_larger_than_cloud_run_limit(client: 
     body = response.json()
     assert len(body) == 3
     assert all(len(a["content"]) == len(base64.b64encode(big)) for a in body)
+
+
+def _attachment_ids(client, ticket_id, api_key):
+    response = client.get(f"/attachments?ticket_ids={ticket_id}&include_content=false", headers={"X-API-Key": api_key})
+    assert response.status_code == 200
+    return {a["name"]: a["attachment_id"] for a in response.json()}
+
+
+def test_list_attachments_include_content_false_skips_loading_files(client: TestClient, db_conn, monkeypatch):
+    import main
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("file content must not be loaded when include_content=false")
+
+    ticket_id, api_key = _create_ticket_with_attachments(db_conn, "no-content", [
+        ("a.bin", [(0, b"aaa")]), ("b.bin", [(0, b"bbb")]),
+    ])
+    monkeypatch.setattr(main, "_load_attachment_content", fail_if_called)
+
+    for url in (f"/attachments?ticket_ids={ticket_id}&include_content=false",
+                f"/tickets/attachments?ticket_ids={ticket_id}&include_content=false",
+                f"/tickets/{ticket_id}/attachments?include_content=false"):
+        response = client.get(url, headers={"X-API-Key": api_key})
+        assert response.status_code == 200
+        body = response.json()
+        assert [a["name"] for a in body] == ["a.bin", "b.bin"]
+        assert all(a["content"] is None for a in body)
+        assert all(a["size"] == 3 for a in body)
+
+
+def test_list_attachments_include_content_defaults_to_true(client: TestClient, db_conn):
+    ticket_id, api_key = _create_ticket_with_attachments(db_conn, "default-content", [("a.bin", [(0, b"aaa")])])
+
+    response = client.get(f"/attachments?ticket_ids={ticket_id}", headers={"X-API-Key": api_key})
+
+    assert base64.b64decode(response.json()[0]["content"]) == b"aaa"
+
+
+def test_get_attachment_content_streams_db_chunks_as_raw_bytes(client: TestClient, db_conn):
+    ticket_id, api_key = _create_ticket_with_attachments(db_conn, "raw-db", [
+        ("relatório final.bin", [(1, b"-second"), (0, b"first"), (2, b"-third")]),
+    ])
+    attachment_id = _attachment_ids(client, ticket_id, api_key)["relatório final.bin"]
+
+    response = client.get(f"/attachments/{attachment_id}/content", headers={"X-API-Key": api_key})
+
+    assert response.status_code == 200
+    assert response.content == b"first-second-third"
+    assert response.headers["content-type"] == "application/octet-stream"
+    assert response.headers["content-disposition"] == (
+        "attachment; filename=\"relat_rio final.bin\"; filename*=UTF-8''relat%C3%B3rio%20final.bin")
+    assert "content-length" not in response.headers
+
+
+def test_get_attachment_content_uses_http_fallback_when_no_chunks(client: TestClient, db_conn, monkeypatch):
+    import main
+
+    captured = {}
+    payload = bytes(range(256)) * 3000  # ~750 KB, sent in several pieces
+
+    def fake_fetch(**kwargs):
+        captured.update(kwargs)
+        return payload
+
+    monkeypatch.setattr(main.osticket_client, "fetch_attachment_content", fake_fetch)
+    ticket_id, api_key = _create_ticket_with_attachments(db_conn, "raw-fallback", [("scan.pdf", [])])
+    attachment_id = _attachment_ids(client, ticket_id, api_key)["scan.pdf"]
+    with db_conn.begin():
+        file_id = db_conn.execute(text("SELECT file_id FROM ost_attachment WHERE id = :id"), {"id": attachment_id}).scalar_one()
+
+    response = client.get(f"/attachments/{attachment_id}/content", headers={"X-API-Key": api_key})
+
+    assert response.status_code == 200
+    assert response.content == payload
+    assert "content-length" not in response.headers
+    assert captured["file_id"] == file_id
+    assert captured["attachment_id"] == attachment_id
+    assert captured["key"] == "raw-fallback-0"
+
+
+def test_get_attachment_content_returns_502_when_fallback_fails(client: TestClient, db_conn, monkeypatch):
+    import main
+    monkeypatch.setattr(main.osticket_client, "fetch_attachment_content", lambda **kwargs: None)
+    ticket_id, api_key = _create_ticket_with_attachments(db_conn, "raw-fallback-fail", [("scan.pdf", [])])
+    attachment_id = _attachment_ids(client, ticket_id, api_key)["scan.pdf"]
+
+    response = client.get(f"/attachments/{attachment_id}/content", headers={"X-API-Key": api_key})
+
+    assert response.status_code == 502
+
+
+def test_get_attachment_content_not_found(client: TestClient, db_conn):
+    _, api_key = _create_ticket_with_attachments(db_conn, "raw-missing", [])
+
+    response = client.get("/attachments/999999/content", headers={"X-API-Key": api_key})
+
+    assert response.status_code == 404
+
+
+def test_get_attachment_content_ignores_non_ticket_attachments(client: TestClient, db_conn):
+    """Only ticket thread attachments are exposed, the same set the list endpoints return."""
+    _, api_key = _create_ticket_with_attachments(db_conn, "raw-non-ticket", [])
+    with db_conn.begin():
+        file_id = db_conn.execute(text("INSERT INTO ost_file (ft, type, size, name, `key`, signature, created) VALUES ('T', 'text/plain', 3, 'faq.txt', 'faqkey', 'sig', NOW())")).lastrowid
+        db_conn.execute(text("INSERT INTO ost_file_chunk (file_id, chunk_id, filedata) VALUES (:fid, 0, 'faq')"), {"fid": file_id})
+        attachment_id = db_conn.execute(text("INSERT INTO ost_attachment (object_id, type, file_id, inline) VALUES (1, 'F', :fid, 0)"), {"fid": file_id}).lastrowid
+
+    response = client.get(f"/attachments/{attachment_id}/content", headers={"X-API-Key": api_key})
+
+    assert response.status_code == 404
+
+
+def test_get_attachment_content_requires_api_key(client: TestClient, db_conn):
+    response = client.get("/attachments/1/content", headers={"X-API-Key": "not-a-real-key"})
+
+    assert response.status_code in (401, 403)
