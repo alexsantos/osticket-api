@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import html
 import logging
 import re
 import threading
@@ -17,6 +18,11 @@ _DOWNLOAD_TIMEOUT = 30
 _URL_EXPIRY_SECONDS = 3600
 
 _CSRF_RE = re.compile(r'name=["\']__CSRFToken__["\']\s+value=["\']([^"\']*)["\']')
+_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+_SCRIPT_STYLE_RE = re.compile(r"<(script|style)[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
+_BODY_EXCERPT_CHARS = 300
 
 _base_url: Optional[str] = None
 _secret_salt: Optional[str] = None
@@ -103,10 +109,44 @@ def _ensure_logged_in() -> bool:
         return _logged_in
 
 
+def _invalidate_login() -> None:
+    """Forces the next _ensure_logged_in() to log in again (staff session expired)."""
+    global _logged_in
+    with _session_lock:
+        _logged_in = False
+
+
+def _summarize_body(text: str) -> str:
+    """
+    Single-line, human-readable excerpt of an error response body for logging.
+
+    Error pages are HTML whose first ~200 chars are boilerplate (doctype, head,
+    meta tags), and Cloud Logging only shows the first line of a multi-line
+    message - so the raw body hides the actual reason. Keep the <title> and the
+    visible text instead.
+    """
+    text = text or ""
+    title_match = _TITLE_RE.search(text)
+    title = html.unescape(_WS_RE.sub(" ", title_match.group(1)).strip()) if title_match else ""
+    visible = html.unescape(_WS_RE.sub(" ", _TAG_RE.sub(" ", _SCRIPT_STYLE_RE.sub(" ", text))).strip())
+    excerpt = visible[:_BODY_EXCERPT_CHARS]
+    return f"title={title!r} text={excerpt!r}" if title else f"text={excerpt!r}"
+
+
+def _is_login_redirect(resp) -> bool:
+    """osTicket redirects unauthenticated file.php requests to (scp/)login.php."""
+    return 300 <= resp.status_code < 400 and "login.php" in resp.headers.get("Location", "")
+
+
 def fetch_attachment_content(file_id: int, attachment_id: int, key: str, file_hash: str) -> Optional[bytes]:
     """
     Returns raw bytes on success, or None on any failure/misconfiguration -
     never raises. Called by main.py only when a file has zero ost_file_chunk rows.
+
+    If the cached staff session has expired, osTicket answers with a redirect to
+    login.php; we log in again and retry once. Redirects are never followed
+    automatically, otherwise the login page's HTML would come back as a 200 and
+    be returned as the attachment's content.
     """
     if not _enabled:
         return None
@@ -120,15 +160,27 @@ def fetch_attachment_content(file_id: int, attachment_id: int, key: str, file_ha
             file_id=file_id,  # ost_file.id - see build_signature docstring
             key=lowered_key, file_hash=file_hash, expires=expires, secret_salt=_secret_salt,
         )
-        resp = _session.get(
-            f"{_base_url}/file.php",
-            params={"key": lowered_key, "id": attachment_id, "expires": expires, "signature": signature},
-            timeout=_DOWNLOAD_TIMEOUT,
-        )
-        if resp.status_code == 200:
-            return resp.content
-        logger.warning("osTicket fallback: file.php %s for attachment_id=%s file_id=%s: %.200s",
-                        resp.status_code, attachment_id, file_id, resp.text)
+        params = {"key": lowered_key, "id": attachment_id, "expires": expires, "signature": signature}
+
+        for attempt in range(2):
+            resp = _session.get(f"{_base_url}/file.php", params=params,
+                                timeout=_DOWNLOAD_TIMEOUT, allow_redirects=False)
+            if resp.status_code == 200:
+                return resp.content
+            if attempt == 0 and _is_login_redirect(resp):
+                logger.info("osTicket fallback: staff session expired; logging in again "
+                            "(attachment_id=%s).", attachment_id)
+                _invalidate_login()
+                if not _ensure_logged_in():
+                    return None
+                continue
+            break
+
+        logger.warning("osTicket fallback: file.php %s for attachment_id=%s file_id=%s "
+                       "(content-type=%r, location=%r): %s",
+                       resp.status_code, attachment_id, file_id,
+                       resp.headers.get("Content-Type", ""), resp.headers.get("Location", ""),
+                       _summarize_body(resp.text))
         return None
     except requests.RequestException:
         logger.exception("osTicket fallback: file.php request failed for attachment_id=%s.", attachment_id)
