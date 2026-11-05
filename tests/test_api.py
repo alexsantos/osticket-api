@@ -2204,3 +2204,74 @@ def test_export_tickets_batch_query_is_driven_by_ticket_primary_key(client: Test
     for row in rows:
         assert "filesort" not in (row["Extra"] or "")
         assert "temporary" not in (row["Extra"] or "")
+
+
+def _create_ticket_with_attachments(db_conn, label, files):
+    """
+    Creates a ticket with one message holding one attachment per (name, chunks) in `files`.
+    `chunks` is a list of (chunk_id, bytes), inserted in the given order. Returns (ticket_id, api_key).
+    """
+    with db_conn.begin():
+        user_id = db_conn.execute(text("INSERT INTO ost_user (org_id, name, created, updated, default_email_id) VALUES (0, :n, NOW(), NOW(), 0)"), {"n": label}).lastrowid
+        ticket_id = db_conn.execute(text("INSERT INTO ost_ticket (number, user_id, status_id, created, updated) VALUES (:n, :uid, 1, NOW(), NOW())"), {"n": label[:20], "uid": user_id}).lastrowid
+        thread_id = db_conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:tid, 'T', NOW())"), {"tid": ticket_id}).lastrowid
+        entry_id = db_conn.execute(text("INSERT INTO ost_thread_entry (thread_id, poster, body, created, updated) VALUES (:thid, 'Poster', 'Body', NOW(), NOW())"), {"thid": thread_id}).lastrowid
+        for name, chunks in files:
+            size = sum(len(data) for _, data in chunks)
+            file_id = db_conn.execute(text("INSERT INTO ost_file (ft, type, size, name, `key`, signature, created) VALUES ('T', 'application/octet-stream', :size, :name, :key, 'sig', NOW())"), {"size": size, "name": name, "key": f"{label}-{name}"}).lastrowid
+            for chunk_id, data in chunks:
+                db_conn.execute(text("INSERT INTO ost_file_chunk (file_id, chunk_id, filedata) VALUES (:fid, :cid, :data)"), {"fid": file_id, "cid": chunk_id, "data": data})
+            db_conn.execute(text("INSERT INTO ost_attachment (object_id, type, file_id, inline) VALUES (:eid, 'H', :fid, 0)"), {"eid": entry_id, "fid": file_id})
+        api_key = f"{label}-key"
+        db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+    return ticket_id, api_key
+
+
+def test_list_attachments_is_streamed_as_one_json_array(client: TestClient, db_conn):
+    """
+    Cloud Run rejects non-streamed responses over 32 MiB, so attachment lists are sent
+    chunked (no Content-Length), while the body stays a single valid JSON array.
+    """
+    ticket_id, api_key = _create_ticket_with_attachments(db_conn, "stream-attach", [
+        ("a.bin", [(0, b"aaa")]), ("b.bin", [(0, b"bbb")]), ("c.bin", [(0, b"ccc")]),
+    ])
+
+    for url in (f"/attachments?ticket_ids={ticket_id}", f"/tickets/{ticket_id}/attachments",
+                f"/tickets/attachments?ticket_ids={ticket_id}"):
+        response = client.get(url, headers={"X-API-Key": api_key})
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/json"
+        assert "content-length" not in response.headers
+        body = response.json()
+        assert [a["name"] for a in body] == ["a.bin", "b.bin", "c.bin"]
+        assert [base64.b64decode(a["content"]) for a in body] == [b"aaa", b"bbb", b"ccc"]
+        assert set(body[0]) == {"ticket_id", "attachment_id", "file_id", "thread_id", "entry_id", "name",
+                                "type", "size", "inline", "created", "cid", "content"}
+
+
+def test_list_attachments_joins_chunks_in_chunk_id_order(client: TestClient, db_conn):
+    ticket_id, api_key = _create_ticket_with_attachments(db_conn, "chunk-order", [
+        ("multi.bin", [(2, b"-end"), (0, b"start"), (1, b"-middle")]),
+    ])
+
+    response = client.get(f"/attachments?ticket_ids={ticket_id}", headers={"X-API-Key": api_key})
+
+    assert response.status_code == 200
+    assert base64.b64decode(response.json()[0]["content"]) == b"start-middle-end"
+
+
+def test_list_attachments_streams_responses_larger_than_cloud_run_limit(client: TestClient, db_conn):
+    """Three 12 MB files are ~48 MB of base64 - over Cloud Run's 32 MiB non-streamed limit."""
+    big = b"x" * (12 * 1024 * 1024)
+    ticket_id, api_key = _create_ticket_with_attachments(db_conn, "big-attach", [
+        (f"big{i}.bin", [(0, big)]) for i in range(3)
+    ])
+
+    response = client.get(f"/attachments?ticket_ids={ticket_id}", headers={"X-API-Key": api_key})
+
+    assert response.status_code == 200
+    assert "content-length" not in response.headers
+    assert len(response.content) > 32 * 1024 * 1024
+    body = response.json()
+    assert len(body) == 3
+    assert all(len(a["content"]) == len(base64.b64encode(big)) for a in body)
