@@ -3,7 +3,7 @@ import hashlib
 import logging
 import os
 from datetime import datetime
-from typing import List, Optional
+from typing import Iterator, List, Optional, Tuple
 import json
 from contextlib import asynccontextmanager
 
@@ -788,7 +788,13 @@ def get_ticket_messages(ticket_id: int):
         return [dict(row) for row in results]
 
 
-def _query_ticket_attachments(conn, ticket_ids: List[int]):
+def _query_ticket_attachments(conn, ticket_ids: List[int]) -> List[Tuple[dict, Optional[str], Optional[str]]]:
+    """
+    Attachment metadata only (no file bytes), as (attachment, file_key, file_hash) tuples.
+
+    file_key and file_hash are kept out of the attachment dict: they are not part of the
+    response, only needed to fetch the content through the osTicket fallback.
+    """
     query = text("""
             SELECT t.ticket_id,
                    a.id AS attachment_id,
@@ -801,62 +807,82 @@ def _query_ticket_attachments(conn, ticket_ids: List[int]):
                    a.inline,
                    f.created,
                    f.`key`       AS file_key,
-                   f.signature   AS file_hash,
-                   fc.chunk_id,
-                   fc.filedata
+                   f.signature   AS file_hash
             FROM ost_ticket t
                      JOIN ost_thread th ON th.object_id = t.ticket_id AND th.object_type = 'T'
                      JOIN ost_thread_entry te ON te.thread_id = th.id
                      JOIN ost_attachment a ON a.object_id = te.id AND a.type = 'H'
                      JOIN ost_file f ON f.id = a.file_id
-                     LEFT JOIN ost_file_chunk fc ON fc.file_id = f.id
             WHERE t.ticket_id IN :ticket_ids
-            ORDER BY f.created ASC, a.id ASC, fc.chunk_id ASC
+            ORDER BY f.created ASC, a.id ASC
             """).bindparams(bindparam("ticket_ids", expanding=True))
     results = conn.execute(query, {"ticket_ids": ticket_ids}).mappings().all()
 
-    attachments = {}
-    chunks = {}
-    fallback_meta = {}
+    attachments = []
     for row in results:
-        attachment_id = row["attachment_id"]
-        if attachment_id not in attachments:
-            attachment = dict(row)
-            attachment.pop("chunk_id", None)
-            attachment.pop("filedata", None)
-            file_key = attachment.pop("file_key", None)
-            file_hash = attachment.pop("file_hash", None)
-            # osTicket rewrites inline <img src="cid:..."> references in the
-            # message body to the attachment's file key, lowercased (see
-            # osTicket's Thread::importMessage()). Exposing that same
-            # lowercased value here lets API consumers match an attachment
-            # back to the "cid:<value>" it's referenced by in the message HTML.
-            attachment["cid"] = file_key.lower() if file_key else None
-            attachments[attachment_id] = attachment
-            chunks[attachment_id] = []
-            fallback_meta[attachment_id] = (file_key, file_hash)
-        if row["filedata"] is not None:
-            chunks[attachment_id].append(row["filedata"])
+        attachment = dict(row)
+        file_key = attachment.pop("file_key", None)
+        file_hash = attachment.pop("file_hash", None)
+        # osTicket rewrites inline <img src="cid:..."> references in the
+        # message body to the attachment's file key, lowercased (see
+        # osTicket's Thread::importMessage()). Exposing that same
+        # lowercased value here lets API consumers match an attachment
+        # back to the "cid:<value>" it's referenced by in the message HTML.
+        attachment["cid"] = file_key.lower() if file_key else None
+        attachments.append((attachment, file_key, file_hash))
+    return attachments
 
-    response = []
-    for attachment_id, attachment in attachments.items():
-        if chunks[attachment_id]:
-            content_bytes = b"".join(chunks[attachment_id])
-        else:
-            # No rows in ost_file_chunk means the file's bytes live in a non-database
-            # storage backend (see ost_file.bk) - fetch them from osTicket's own
-            # web frontend instead. Returns None (-> content stays null) if the
-            # fallback isn't configured, or the fetch itself fails.
-            file_key, file_hash = fallback_meta[attachment_id]
-            content_bytes = osticket_client.fetch_attachment_content(
-                file_id=attachment["file_id"],  # a.file_id == ost_file.id via the join
-                attachment_id=attachment_id,
-                key=file_key,
-                file_hash=file_hash,
-            )
-        attachment["content"] = base64.b64encode(content_bytes).decode("ascii") if content_bytes else None
-        response.append(attachment)
-    return response
+
+def _load_attachment_content(conn, attachment: dict, file_key: Optional[str],
+                             file_hash: Optional[str]) -> Optional[bytes]:
+    """The attachment's file bytes, from ost_file_chunk or the osTicket fallback; None if unavailable."""
+    chunks = conn.execute(
+        text("SELECT filedata FROM ost_file_chunk WHERE file_id = :file_id ORDER BY chunk_id ASC"),
+        {"file_id": attachment["file_id"]},
+    ).scalars().all()
+    chunks = [c for c in chunks if c is not None]
+    if chunks:
+        return b"".join(chunks)
+    # No rows in ost_file_chunk means the file's bytes live in a non-database
+    # storage backend (see ost_file.bk) - fetch them from osTicket's own
+    # web frontend instead. Returns None (-> content stays null) if the
+    # fallback isn't configured, or the fetch itself fails.
+    return osticket_client.fetch_attachment_content(
+        file_id=attachment["file_id"],  # a.file_id == ost_file.id via the join
+        attachment_id=attachment["attachment_id"],
+        key=file_key,
+        file_hash=file_hash,
+    )
+
+
+def _stream_attachments(attachments: List[Tuple[dict, Optional[str], Optional[str]]]) -> Iterator[str]:
+    """
+    Yields the attachments as one JSON array, one attachment at a time.
+
+    Only one attachment's content is held in memory at a time, and the response goes out
+    chunked: Cloud Run rejects non-streamed responses over 32 MiB ("Response size was too
+    large"), which a few large base64-encoded attachments easily exceed. A connection is
+    taken from the pool per attachment, so a slow client doesn't hold one for the whole
+    response.
+    """
+    yield "["
+    for index, (attachment, file_key, file_hash) in enumerate(attachments):
+        with _get_engine().connect() as conn:
+            content_bytes = _load_attachment_content(conn, attachment, file_key, file_hash)
+        item = {**attachment,
+                "content": base64.b64encode(content_bytes).decode("ascii") if content_bytes else None}
+        yield ("," if index else "") + AttachmentsResponse.model_validate(item).model_dump_json()
+    yield "]"
+
+
+def _attachments_response(ticket_ids: List[int]) -> StreamingResponse:
+    # Look up the metadata before streaming starts, so "not found" is still a normal 404
+    # rather than a cut-off stream.
+    with _get_engine().connect() as conn:
+        attachments = _query_ticket_attachments(conn, ticket_ids)
+    if not attachments:
+        raise HTTPException(status_code=404, detail="Ticket or Attachments not found")
+    return StreamingResponse(_stream_attachments(attachments), media_type="application/json")
 
 
 @app.get("/attachments", dependencies=[Depends(verify_token)], tags=["Attachments"],
@@ -865,17 +891,14 @@ def list_attachments(ticket_ids: List[int] = Depends(CommaSeparatedInts("ticket_
     """
     Retrieve the attachments for a list of tickets by their unique ID.
     Returns a 404 error if no matching tickets or attachments are found.
+
+    The response is streamed, so a failure partway through cannot change the status code:
+    the connection is cut instead, which HTTP clients report as an incomplete response.
     """
     if not ticket_ids:
         raise HTTPException(status_code=422, detail="Query parameter 'ticket_ids' is required")
 
-    with _get_engine().connect() as conn:
-        response = _query_ticket_attachments(conn, ticket_ids)
-
-        if not response:
-            raise HTTPException(status_code=404, detail="Ticket or Attachments not found")
-
-        return response
+    return _attachments_response(ticket_ids)
 
 
 @app.get("/tickets/attachments", dependencies=[Depends(verify_token)], tags=["Tickets"],
@@ -896,14 +919,11 @@ def get_ticket_attachments(ticket_id: int):
     """
     Retrieve the attachments for a single ticket by its unique ID.
     Returns a 404 error if the ticket cannot be found or has no attachments.
+
+    The response is streamed, so a failure partway through cannot change the status code:
+    the connection is cut instead, which HTTP clients report as an incomplete response.
     """
-    with _get_engine().connect() as conn:
-        response = _query_ticket_attachments(conn, [ticket_id])
-
-        if not response:
-            raise HTTPException(status_code=404, detail="Ticket or Attachments not found")
-
-        return response
+    return _attachments_response([ticket_id])
 
 
 @app.get("/tickets/{ticket_id}", response_model=TicketItem, dependencies=[Depends(verify_token)], tags=["Tickets"])
