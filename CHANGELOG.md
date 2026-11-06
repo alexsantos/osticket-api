@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Dates are the date of each
 release's tag.
 
+## [Unreleased]
+
+### Fixed
+- Publishing an older release no longer moves the `latest` Docker image tag to it.
+  `docker/metadata-action` added `latest` to every semver release by default, bypassing the
+  highest-tag check, so publishing 0.10.20 and 0.10.21 after 0.11.0 briefly pointed `latest`
+  at 0.10.21.
+
 ## [0.11.0] - 2026-11-05
 
 ### Added
