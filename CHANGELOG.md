@@ -8,6 +8,8 @@ release's tag.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-16
+
 ### Added
 - `POST /users` creates an osTicket user from a `name` and an `email`, so a client such as an
   email-to-ticket importer can register a new requester before opening their ticket. If the
