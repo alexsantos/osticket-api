@@ -8,6 +8,17 @@ release's tag.
 
 ## [Unreleased]
 
+### Added
+- `POST /users` creates an osTicket user from a `name` and an `email`, so a client such as an
+  email-to-ticket importer can register a new requester before opening their ticket. If the
+  address already belongs to a user it returns `409`, with that user's id in the error detail.
+- `POST /tickets` now returns the ticket's `thread_id` and the `entry_id` of its initial message
+  alongside `ticket_id` and `number`. Files can be attached to that message straight away, without
+  first calling `GET /tickets/{ticket_id}/messages` to find it.
+- Optional `source` field on `POST /tickets` (`Web`, `Email`, `Phone`, `API` or `Other`), stored on
+  the ticket and its initial message. When omitted, tickets keep osTicket's default of `Other`, as
+  before.
+
 ### Fixed
 - Publishing an older release no longer moves the `latest` Docker image tag to it.
   `docker/metadata-action` added `latest` to every semver release by default, bypassing the
