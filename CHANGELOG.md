@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Dates are the date of each
 release's tag.
 
+## [Unreleased]
+
+## [0.12.0] - 2026-11-16
+
+### Added
+- `POST /users` creates an osTicket user from a `name` and an `email`, so a client such as an
+  email-to-ticket importer can register a new requester before opening their ticket. If the
+  address already belongs to a user it returns `409`, with that user's id in the error detail.
+- `POST /tickets` now returns the ticket's `thread_id` and the `entry_id` of its initial message
+  alongside `ticket_id` and `number`. Files can be attached to that message straight away, without
+  first calling `GET /tickets/{ticket_id}/messages` to find it.
+- Optional `source` field on `POST /tickets` (`Web`, `Email`, `Phone`, `API` or `Other`), stored on
+  the ticket and its initial message. When omitted, tickets keep osTicket's default of `Other`, as
+  before.
+
+### Fixed
+- Publishing an older release no longer moves the `latest` Docker image tag to it.
+  `docker/metadata-action` added `latest` to every semver release by default, bypassing the
+  highest-tag check, so publishing 0.10.20 and 0.10.21 after 0.11.0 briefly pointed `latest`
+  at 0.10.21.
+
 ## [0.11.0] - 2026-11-05
 
 ### Added

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -9,6 +9,9 @@ from pydantic import BaseModel, Field
 # there, surfacing as a generic 500 instead of a clean 422.
 MAX_THREAD_ENTRY_BODY_LENGTH = 65535
 
+# Values allowed by osTicket's ost_ticket.source enum.
+TicketSource = Literal["Web", "Email", "Phone", "API", "Other"]
+
 
 # --- Request Models ---
 class TicketCreate(BaseModel):
@@ -17,6 +20,15 @@ class TicketCreate(BaseModel):
     message: str = Field(max_length=MAX_THREAD_ENTRY_BODY_LENGTH)
     topic_id: Optional[int] = None
     dept_id: Optional[int] = None
+    # Channel the ticket came from. When omitted, osTicket's column default
+    # ('Other') is kept, so existing clients see no change.
+    source: Optional[TicketSource] = None
+
+
+class UserCreate(BaseModel):
+    # Lengths match ost_user.name and ost_user_email.address (varchar(128)).
+    name: str = Field(min_length=1, max_length=128)
+    email: str = Field(min_length=3, max_length=128, pattern=r"^[^@\s]+@[^@\s]+$")
 
 
 class NoteCreate(BaseModel):
@@ -145,6 +157,10 @@ class PaginatedTicketResponse(BaseModel):
 class TicketCreateResponse(BaseModel):
     ticket_id: int
     number: str
+    # The ticket's thread and its initial message, so a client can attach
+    # files to that message without a follow-up GET /tickets/{id}/messages.
+    thread_id: int
+    entry_id: int
 
 
 class AttachmentResponse(BaseModel):

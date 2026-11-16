@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 from sqlalchemy import text, exc
+import pytest
 import io
 import base64
 from datetime import datetime, timedelta
@@ -2391,3 +2392,156 @@ def test_get_attachment_content_requires_api_key(client: TestClient, db_conn):
     response = client.get("/attachments/1/content", headers={"X-API-Key": "not-a-real-key"})
 
     assert response.status_code in (401, 403)
+
+
+# --- POST /users, and ticket creation fields used by email ingestion ---
+
+def _query(db_conn, sql, params=None):
+    """Read in its own transaction so the fixture's teardown can begin() cleanly."""
+    with db_conn.begin():
+        return db_conn.execute(text(sql), params or {}).mappings().all()
+
+
+def _seed_api_key(db_conn, api_key="my-secret-test-key"):
+    db_conn.execute(text("INSERT INTO ost_api_key (isactive, ipaddr, apikey, created, updated) "
+                         "VALUES (1, 'testclient', :apikey, NOW(), NOW())"), {"apikey": api_key})
+    return {"X-API-Key": api_key}
+
+
+def _seed_ticket_prereqs(db_conn):
+    db_conn.execute(text("INSERT INTO ost_ticket_status (id, name, state, mode, flags, properties, created, updated) "
+                         "VALUES (1, 'Open', 'open', 3, 0, '{}', NOW(), NOW())"))
+    db_conn.execute(text("INSERT INTO ost_sequence (id, name, next, updated) VALUES (1, 'ticket_number', 0, NOW())"))
+    db_conn.execute(text("INSERT INTO ost_config (`key`, `value`, namespace, updated) "
+                         "VALUES ('ticket_sequence_id', '1', 'core', NOW())"))
+    db_conn.execute(text("INSERT INTO ost_config (`key`, `value`, namespace, updated) "
+                         "VALUES ('ticket_number_format', '######', 'core', NOW())"))
+
+
+def test_create_user(client: TestClient, db_conn):
+    with db_conn.begin():
+        headers = _seed_api_key(db_conn)
+
+    response = client.post("/users", headers=headers, json={"name": " Ana Silva ", "email": "ana@example.com"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "Ana Silva"
+    assert body["email"] == "ana@example.com"
+
+    (row,) = _query(db_conn, """
+        SELECT u.name, u.org_id, ue.address, ue.user_id
+        FROM ost_user u JOIN ost_user_email ue ON ue.id = u.default_email_id
+        WHERE u.id = :uid
+    """, {"uid": body["id"]})
+    assert row["address"] == "ana@example.com"
+    assert row["user_id"] == body["id"]
+    assert row["org_id"] == 0
+
+    # The new user is found by the existing email lookup.
+    found = client.get("/users", headers=headers, params={"email": "ana@example.com"}).json()
+    assert [u["id"] for u in found["items"]] == [body["id"]]
+
+
+def test_create_user_duplicate_email_returns_409_with_existing_id(client: TestClient, db_conn):
+    with db_conn.begin():
+        headers = _seed_api_key(db_conn)
+
+    first = client.post("/users", headers=headers, json={"name": "Ana", "email": "ana@example.com"})
+    assert first.status_code == 200
+
+    # Lookup is case-insensitive, as in osTicket (utf8 general_ci collation).
+    second = client.post("/users", headers=headers, json={"name": "Ana 2", "email": "ANA@example.com"})
+    assert second.status_code == 409
+    assert second.json()["detail"]["user_id"] == first.json()["id"]
+    assert _query(db_conn, "SELECT COUNT(*) AS n FROM ost_user")[0]["n"] == 1
+
+
+def test_create_user_concurrent_insert_returns_409(client: TestClient, db_conn, monkeypatch):
+    import main as main_module
+    from sqlalchemy.exc import IntegrityError
+
+    with db_conn.begin():
+        headers = _seed_api_key(db_conn)
+
+    original_execute = main_module.text
+
+    def text_raising_on_email_insert(sql, *args, **kwargs):
+        if "INSERT INTO ost_user_email" in sql:
+            raise IntegrityError(sql, {}, Exception("Duplicate entry"))
+        return original_execute(sql, *args, **kwargs)
+
+    monkeypatch.setattr(main_module, "text", text_raising_on_email_insert)
+    response = client.post("/users", headers=headers, json={"name": "Ana", "email": "ana@example.com"})
+    assert response.status_code == 409
+
+
+@pytest.mark.parametrize("payload", [
+    {"name": "Ana", "email": "not-an-email"},
+    {"name": "", "email": "ana@example.com"},
+    {"name": "Ana", "email": "a" * 120 + "@example.com"},
+])
+def test_create_user_validation(client: TestClient, db_conn, payload):
+    with db_conn.begin():
+        headers = _seed_api_key(db_conn)
+    assert client.post("/users", headers=headers, json=payload).status_code == 422
+
+
+def test_create_user_requires_api_key(client: TestClient):
+    assert client.post("/users", json={"name": "Ana", "email": "ana@example.com"}).status_code == 422
+
+
+def test_create_ticket_returns_thread_and_entry_ids(client: TestClient, db_conn):
+    with db_conn.begin():
+        headers = _seed_api_key(db_conn)
+        _seed_ticket_prereqs(db_conn)
+    user_id = client.post("/users", headers=headers, json={"name": "Ana", "email": "ana@example.com"}).json()["id"]
+
+    response = client.post("/tickets", headers=headers, json={"user_id": user_id, "subject": "S", "message": "M"})
+    assert response.status_code == 200
+    body = response.json()
+
+    (entry,) = _query(db_conn, """
+        SELECT te.id, te.thread_id, th.object_id, te.body
+        FROM ost_thread_entry te JOIN ost_thread th ON th.id = te.thread_id
+        WHERE te.id = :eid
+    """, {"eid": body["entry_id"]})
+    assert entry["thread_id"] == body["thread_id"]
+    assert entry["object_id"] == body["ticket_id"]
+    assert entry["body"] == "M"
+
+    # The returned entry_id is usable straight away for attachments.
+    upload = client.post(f"/tickets/{body['ticket_id']}/messages/{body['entry_id']}/attachments",
+                         headers=headers, files={"file": ("a.txt", b"hello", "text/plain")})
+    assert upload.status_code == 200
+
+
+def test_create_ticket_with_source(client: TestClient, db_conn):
+    with db_conn.begin():
+        headers = _seed_api_key(db_conn)
+        _seed_ticket_prereqs(db_conn)
+    user_id = client.post("/users", headers=headers, json={"name": "Ana", "email": "ana@example.com"}).json()["id"]
+
+    body = client.post("/tickets", headers=headers,
+                       json={"user_id": user_id, "subject": "S", "message": "M", "source": "Email"}).json()
+
+    assert _query(db_conn, "SELECT source FROM ost_ticket WHERE ticket_id = :t", {"t": body["ticket_id"]})[0]["source"] == "Email"
+    assert _query(db_conn, "SELECT source FROM ost_thread_entry WHERE id = :e", {"e": body["entry_id"]})[0]["source"] == "Email"
+
+
+def test_create_ticket_without_source_keeps_default(client: TestClient, db_conn):
+    with db_conn.begin():
+        headers = _seed_api_key(db_conn)
+        _seed_ticket_prereqs(db_conn)
+    user_id = client.post("/users", headers=headers, json={"name": "Ana", "email": "ana@example.com"}).json()["id"]
+
+    body = client.post("/tickets", headers=headers, json={"user_id": user_id, "subject": "S", "message": "M"}).json()
+
+    assert _query(db_conn, "SELECT source FROM ost_ticket WHERE ticket_id = :t", {"t": body["ticket_id"]})[0]["source"] == "Other"
+
+
+def test_create_ticket_invalid_source(client: TestClient, db_conn):
+    with db_conn.begin():
+        headers = _seed_api_key(db_conn)
+    response = client.post("/tickets", headers=headers,
+                           json={"user_id": 1, "subject": "S", "message": "M", "source": "Fax"})
+    assert response.status_code == 422
