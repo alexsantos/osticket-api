@@ -14,11 +14,12 @@ from fastapi import (Depends, FastAPI, File, Header, HTTPException, Query,
 from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy import bindparam, create_engine, text, event
 from sqlalchemy.engine import Engine, URL
+from sqlalchemy.exc import IntegrityError
 
 import osticket_client
 from models import (AttachmentResponse, CloseResponse, DepartmentResponse, TeamResponse,
                     HealthResponse, MessageCreate, MessageResponse, NoteCreate, NoteResponse, PaginatedTicketResponse, StatusResponse,
-                    TicketCreate, TicketCreateResponse, TopicResponse, UserResponse, PaginatedUserResponse, TicketItem, MessagesResponse,
+                    TicketCreate, TicketCreateResponse, TopicResponse, UserCreate, UserResponse, PaginatedUserResponse, TicketItem, MessagesResponse,
                     StatusUpdateRequest, DepartmentUpdateRequest, TeamUpdateRequest, MessageUpdateRequest,
                     UpdateResponse, AttachmentsResponse)
 from utils import build_pagination_urls, CommaSeparatedInts
@@ -332,6 +333,49 @@ def get_user(user_id: int):
         if not result:
             raise HTTPException(status_code=404, detail="User not found")
         return dict(result)
+
+
+@app.post("/users", response_model=UserResponse, dependencies=[Depends(verify_token)], tags=["Users"])
+def create_user(user: UserCreate):
+    """
+    Create a new osTicket user (end user / requester) with a single email address.
+
+    Returns `409` if the email address already belongs to a user; the existing user's id
+    is included in the error detail. Look users up first with `GET /users?email=...`.
+    """
+    email = user.email.strip()
+    name = user.name.strip()
+    try:
+        with _get_engine().begin() as conn:
+            existing = conn.execute(text("SELECT user_id FROM ost_user_email WHERE address = :email"),
+                                    {"email": email}).scalar_one_or_none()
+            if existing is not None:
+                raise HTTPException(status_code=409,
+                                    detail={"message": "A user with this email already exists.",
+                                            "user_id": existing})
+
+            user_id = conn.execute(text("""
+                INSERT INTO ost_user (org_id, default_email_id, status, name, created, updated)
+                VALUES (0, 0, 0, :name, NOW(), NOW())
+                """), {"name": name}).lastrowid
+            email_id = conn.execute(text("INSERT INTO ost_user_email (user_id, flags, address) VALUES (:uid, 0, :email)"),
+                                    {"uid": user_id, "email": email}).lastrowid
+            conn.execute(text("UPDATE ost_user SET default_email_id = :eid WHERE id = :uid"),
+                         {"eid": email_id, "uid": user_id})
+
+            row = conn.execute(text("""
+                SELECT u.id, u.name, ue.address AS email, u.created, u.updated
+                FROM ost_user u JOIN ost_user_email ue ON ue.id = u.default_email_id
+                WHERE u.id = :uid
+                """), {"uid": user_id}).mappings().one()
+            return dict(row)
+    except HTTPException:
+        raise
+    except IntegrityError as e:
+        # Lost a race with a concurrent request for the same address (unique key on address).
+        raise HTTPException(status_code=409, detail={"message": "A user with this email already exists."}) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="An internal error occurred while creating the user.") from e
 
 
 # --- TICKETS ---
@@ -1134,23 +1178,26 @@ def create_ticket(ticket: TicketCreate):
             insert_topic_id = ticket.topic_id if ticket.topic_id is not None else 1
             insert_dept_id = ticket.dept_id if ticket.dept_id is not None else 1
 
+            # COALESCE keeps osTicket's column default ('Other') when no source is given.
             res = conn.execute(text("""
-                                    INSERT INTO ost_ticket (number, user_id, dept_id, topic_id, status_id, created, updated)
-                                    VALUES (:n, :user_id, :dept_id, :topic, :status_id, NOW(), NOW())
+                                    INSERT INTO ost_ticket (number, user_id, dept_id, topic_id, status_id, source, created, updated)
+                                    VALUES (:n, :user_id, :dept_id, :topic, :status_id, COALESCE(:source, 'Other'), NOW(), NOW())
                                     """), {"n": t_num, "user_id": ticket.user_id, "dept_id": insert_dept_id,
-                                           "topic": insert_topic_id, "status_id": open_status_id})
+                                           "topic": insert_topic_id, "status_id": open_status_id,
+                                           "source": ticket.source})
             tid = res.lastrowid
 
             thread_res = conn.execute(text("INSERT INTO ost_thread (object_id, object_type, created) VALUES (:id, 'T', NOW())"),
                          {"id": tid})
             thid = thread_res.lastrowid
 
-            conn.execute(text("""
-                              INSERT INTO ost_thread_entry (thread_id, type, title, body, poster, created, updated)
-                              VALUES (:thid, 'M', :title, :body, :p, NOW(), NOW())
-                              """), {"thid": thid, "title": ticket.subject, "body": ticket.message, "p": "API"})
+            entry_id = conn.execute(text("""
+                              INSERT INTO ost_thread_entry (thread_id, type, title, body, poster, source, created, updated)
+                              VALUES (:thid, 'M', :title, :body, :p, :source, NOW(), NOW())
+                              """), {"thid": thid, "title": ticket.subject, "body": ticket.message, "p": "API",
+                                     "source": ticket.source or ""}).lastrowid
 
-            return {"ticket_id": tid, "number": t_num}
+            return {"ticket_id": tid, "number": t_num, "thread_id": thid, "entry_id": entry_id}
     except HTTPException:
         raise
     except Exception as e:
