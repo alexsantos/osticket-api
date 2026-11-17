@@ -15,11 +15,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency definitions
-COPY pyproject.toml uv.lock* ./
+COPY pyproject.toml uv.lock ./
 
-# Install dependencies using uv
+# Install exactly the versions pinned in uv.lock - the ones CI tested - verified by hash.
+# --locked fails the build if uv.lock is out of date with pyproject.toml instead of re-resolving.
 # The --system flag installs them in the global environment, which is common for containers
-RUN uv pip install --system -r pyproject.toml
+RUN uv export --locked --no-dev --no-emit-project -o /tmp/requirements.txt \
+    && uv pip install --system --require-hashes -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
 
 # Copy the rest of the application source code
 COPY . .
