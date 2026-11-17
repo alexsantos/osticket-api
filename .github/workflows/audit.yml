@@ -1,0 +1,35 @@
+name: Dependency Audit
+
+# Fails when a locked dependency has a known vulnerability. Runs on every change, and weekly,
+# because new advisories are published against versions that haven't changed.
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main", "develop" ]
+  schedule:
+    - cron: "0 6 * * 1"   # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pip-audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Export locked dependencies
+        # --locked fails if uv.lock is out of date with pyproject.toml. Dev dependencies are
+        # included: they run in CI with access to its secrets.
+        run: uv export --locked --all-groups --no-emit-project -o requirements-audit.txt
+
+      - name: Audit for known vulnerabilities
+        # Audits the exact hashed versions in the lock, without resolving or installing anything.
+        run: uvx pip-audit==2.10.1 --strict --disable-pip --require-hashes -r requirements-audit.txt
