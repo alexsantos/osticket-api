@@ -1,0 +1,32 @@
+# Weekly dependency update PRs against develop (git-flow: updates ship in the next release;
+# an urgent security fix can still go out as a hotfix from main).
+version: 2
+updates:
+  # Python packages: updates uv.lock, and pyproject.toml when a new version is outside its range.
+  - package-ecosystem: "uv"
+    directory: "/"
+    target-branch: "develop"
+    schedule:
+      interval: "weekly"
+    groups:
+      # One PR for all minor and patch updates; major updates get their own PR each.
+      python-minor-and-patch:
+        update-types: ["minor", "patch"]
+    open-pull-requests-limit: 5
+
+  # Base image in the Dockerfile (python:3.14-slim).
+  - package-ecosystem: "docker"
+    directory: "/"
+    target-branch: "develop"
+    schedule:
+      interval: "weekly"
+
+  # Actions used by the workflows in .github/workflows.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "develop"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns: ["*"]

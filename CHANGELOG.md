@@ -8,6 +8,14 @@ release's tag.
 
 ## [Unreleased]
 
+### Added
+- Dependabot opens weekly update PRs against `develop` for the Python packages in `uv.lock`, the
+  Docker base image and the GitHub Actions used by the workflows. Minor and patch Python updates
+  are grouped into one PR.
+- A Dependency Audit workflow runs `pip-audit` on the exact versions in `uv.lock` on every push and
+  pull request to `main` and `develop`, and weekly, and fails when any of them has a known
+  vulnerability.
+
 ## [0.12.1] - 2026-11-17
 
 ### Security
