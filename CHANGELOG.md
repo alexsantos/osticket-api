@@ -8,6 +8,24 @@ release's tag.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-17
+
+### Security
+- Upgraded dependencies to fix 12 known vulnerabilities reported by `pip-audit` in packages that
+  the direct dependencies pull in: anyio (to 4.16.0), certifi (to 2026.10.23), urllib3 (to 2.8.0)
+  and opentelemetry-api (to 1.45.2). FastAPI goes to 0.163.1, SQLAlchemy to 2.1.9 and
+  mysqlclient to 2.3.1.
+
+### Fixed
+- The Docker image now installs exactly the versions in `uv.lock`, the ones CI tests, verified by
+  hash. Before, it installed from `pyproject.toml` and `uv.lock` was excluded from the build, so
+  only the directly pinned packages were fixed and everything they pulled in was whatever PyPI had
+  at build time. The build now fails if `uv.lock` is out of date with `pyproject.toml`.
+
+### Changed
+- `pyproject.toml` declares compatible version ranges instead of exact pins. The exact versions
+  are recorded in `uv.lock`.
+
 ## [0.12.0] - 2026-11-16
 
 ### Added
